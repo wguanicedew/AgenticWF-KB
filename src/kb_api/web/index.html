@@ -1,0 +1,869 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="kb-base" content="{{BASE}}">
+<meta name="kb-mode" content="{{MODE}}">
+<title>AgenticWF KB</title>
+<meta name="color-scheme" content="light dark">
+<style>
+:root{--bg:#fff;--fg:#1d2330;--muted:#5d6676;--line:#dde1e8;--panel:#f6f7f9;--accent:#2457c5;--bad:#b42318;--ok:#18794e;--warn:#9a6700}
+@media (prefers-color-scheme:dark){:root{--bg:#14171c;--fg:#e4e7ec;--muted:#98a2b3;--line:#2c323b;--panel:#1b1f26;--accent:#7aa2ff;--bad:#f97066;--ok:#47cd89;--warn:#fdb022}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{display:flex;gap:12px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line)}
+header h1{font-size:16px;margin:0;flex:1}
+header .who{color:var(--muted)}
+main{display:grid;grid-template-columns:260px 1fr;min-height:calc(100vh - 49px)}
+@media (max-width:760px){main{grid-template-columns:1fr}}
+aside{border-right:1px solid var(--line);padding:12px;background:var(--panel)}
+section{padding:12px 16px;min-width:0}
+h2{font-size:15px;margin:0 0 8px}
+h3{font-size:13px;margin:16px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+button,input,select,textarea{font:inherit;color:inherit}
+button{border:1px solid var(--line);background:var(--bg);border-radius:6px;padding:4px 10px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button:disabled{opacity:.5;cursor:default}
+input,select,textarea{border:1px solid var(--line);background:var(--bg);border-radius:6px;padding:4px 8px;max-width:100%}
+textarea{width:100%;min-height:70px}
+.kb-list{list-style:none;padding:0;margin:0}
+.kb-list li{padding:6px 8px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;gap:6px}
+.kb-list li.active{background:var(--bg);outline:1px solid var(--line)}
+.kb-list small{color:var(--muted)}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:8px 0 12px;flex-wrap:wrap}
+.tabs button{border:none;border-bottom:2px solid transparent;border-radius:0;background:none;padding:6px 10px}
+.tabs button.on{border-bottom-color:var(--accent);color:var(--accent)}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:6px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:500;font-size:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:6px 0}
+.muted{color:var(--muted)}
+.badge{display:inline-block;padding:0 6px;border-radius:10px;font-size:12px;border:1px solid var(--line)}
+.badge.completed,.badge.live,.badge.enabled{color:var(--ok)}
+.badge.failed{color:var(--bad)}
+.badge.pending,.badge.processing,.badge.finalizing{color:var(--warn)}
+.hit{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:8px 0}
+.hit .meta{color:var(--muted);font-size:12px}
+.hit pre,.passage{white-space:pre-wrap;word-break:break-word;margin:6px 0 0;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}
+.answer{white-space:pre-wrap;border-left:3px solid var(--accent);padding:4px 10px;margin:8px 0}
+sup.cite{color:var(--accent);cursor:help}
+.trail{font-size:12px;color:var(--muted);max-height:220px;overflow:auto;border:1px dashed var(--line);border-radius:6px;padding:6px}
+.error{color:var(--bad)}
+.hidden{display:none}
+.split{display:grid;grid-template-columns:240px 1fr;gap:16px}
+@media (max-width:900px){.split{grid-template-columns:1fr}}
+.page-list{max-height:70vh;overflow:auto;font-size:13px}
+.page-list h4{margin:10px 0 4px;color:var(--muted);font-size:12px}
+.page-list a{display:block;padding:2px 4px;border-radius:4px;color:var(--fg);text-decoration:none;cursor:pointer}
+.page-list a.on,.page-list a:hover{background:var(--panel)}
+.wiki-page{line-height:1.6}
+.wiki-page h1{font-size:20px}.wiki-page h2{font-size:16px}.wiki-page h3{font-size:14px}
+.wiki-page a.wl{color:var(--accent);cursor:pointer;text-decoration:none;border-bottom:1px dotted var(--accent)}
+.wiki-page a.dead{color:var(--bad)}
+sup.src{color:var(--muted);font-size:10px}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;font-size:13px}
+.ok-check{color:var(--ok)}.bad-check{color:var(--bad)}
+.side-link{display:block;padding:6px 8px;border-radius:6px;cursor:pointer;margin-top:8px}
+.side-link.active{background:var(--bg);outline:1px solid var(--line)}
+pre.json{white-space:pre-wrap;font:12px ui-monospace,Menlo,monospace;background:var(--panel);padding:8px;border-radius:6px;max-height:320px;overflow:auto}
+</style>
+</head>
+<body>
+<header>
+  <h1>AgenticWF knowledge base</h1>
+  <span class="who" id="who"></span>
+  <form id="logout" class="hidden" method="post"><button>Sign out</button></form>
+</header>
+<main>
+  <aside>
+    <h2>Knowledge bases</h2>
+    <ul class="kb-list" id="kbs"></ul>
+    <a class="side-link hidden" id="memory-link">🧠 My memory</a>
+    <h3>New knowledge base</h3>
+    <form id="new-kb">
+      <div class="row"><input name="name" placeholder="Name" required style="flex:1"></div>
+      <div class="row">
+        <select name="type" id="new-kb-type"><option value="document">documents</option><option value="faq">FAQ</option></select>
+        <button class="primary">Create</button>
+      </div>
+      <label class="row muted hidden" id="new-kb-wiki"><input type="checkbox" name="wiki"> build an LLM wiki</label>
+    </form>
+  </aside>
+  <section>
+    <div id="empty" class="muted">Choose a knowledge base.</div>
+    <div id="kb-view" class="hidden">
+      <h2 id="kb-title"></h2>
+      <div class="muted" id="kb-meta"></div>
+      <div class="tabs" id="tabs"></div>
+      <div id="pane"></div>
+    </div>
+  </section>
+</main>
+<script>
+"use strict";
+const BASE = document.querySelector('meta[name="kb-base"]').content;
+const MODE = document.querySelector('meta[name="kb-mode"]').content;
+const API = BASE + "/api/v1";
+let state = {kbs: [], kb: null, tab: "documents"};
+let FEATURES = {};
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const $ = id => document.getElementById(id);
+
+async function api(path, opts = {}) {
+  const init = {credentials: "same-origin", ...opts, headers: {...(opts.headers || {})}};
+  if (opts.json !== undefined) { init.body = JSON.stringify(opts.json); init.headers["Content-Type"] = "application/json"; }
+  const r = await fetch(API + path, init);
+  let body = null;
+  try { body = await r.json(); } catch (_) {}
+  if (!r.ok || !body || body.success === false) throw new Error(body?.error?.message || ("HTTP " + r.status));
+  return body;
+}
+
+function fail(where, e) { where.insertAdjacentHTML("afterbegin", `<p class="error">${esc(e.message || e)}</p>`); }
+
+async function loadMe() {
+  try {
+    const me = (await api("/me")).data;
+    $("who").textContent = `${me.subject} · ${MODE}`;
+    if (MODE === "standalone") { $("logout").action = BASE + "/auth/logout"; $("logout").classList.remove("hidden"); }
+  } catch (e) { $("who").textContent = "not signed in"; }
+  try { FEATURES = (await api("/system/info")).data.features || {}; } catch (_) { FEATURES = {}; }
+  if (FEATURES.records) $("new-kb-type").insertAdjacentHTML("beforeend", '<option value="records">records</option>');
+  if (FEATURES.wiki) $("new-kb-wiki").classList.remove("hidden");
+  if (FEATURES.memory) { $("memory-link").classList.remove("hidden"); $("memory-link").onclick = openMemory; }
+}
+
+const wikiOn = kb => FEATURES.wiki && kb.indexing_strategy && kb.indexing_strategy.wiki_enabled;
+
+async function loadKbs(select) {
+  const body = await api("/knowledge-bases?page_size=100");
+  state.kbs = body.data;
+  const ul = $("kbs");
+  ul.innerHTML = state.kbs.map(kb => `<li data-id="${esc(kb.id)}" class="${state.kb && state.kb.id === kb.id ? "active" : ""}">
+    <span>${esc(kb.name)}${kb.type !== "document" ? ` <span class="badge">${esc(kb.type)}</span>` : ""}${wikiOn(kb) ? ' <span class="badge">wiki</span>' : ""}</span>
+    <small>${kb.knowledge_count ?? ""}</small></li>`).join("");
+  ul.querySelectorAll("li").forEach(li => li.onclick = () => openKb(li.dataset.id));
+  if (select) openKb(select);
+}
+
+function tabsFor(kb) {
+  const common = [["search", "Search"], ["agentic", "Agentic search"], ["tags", "Tags"]];
+  if (kb.type === "faq") return [["faq", "Entries"], ...common, ["settings", "Settings"]];
+  if (kb.type === "records") return [["records", "Records"], ["query", "Query"], ["types", "Record types"],
+                                     ["search", "Search"], ["agentic", "Agentic search"], ["settings", "Settings"]];
+  return [["documents", "Documents"], ...(wikiOn(kb) ? [["wiki", "Wiki"]] : []), ...common,
+          ["freshness", "Freshness"], ["settings", "Settings"]];
+}
+
+async function openKb(id) {
+  state.kb = state.kbs.find(k => k.id === id) || (await api(`/knowledge-bases/${id}`)).data;
+  const tabs = tabsFor(state.kb);
+  if (!tabs.some(([t]) => t === state.tab)) state.tab = tabs[0][0];
+  $("empty").classList.add("hidden"); $("kb-view").classList.remove("hidden"); $("memory-link").classList.remove("active");
+  $("kb-title").textContent = state.kb.name;
+  $("kb-meta").textContent = `${state.kb.ref} · ${state.kb.visibility}${state.kb.groups.length ? " (" + state.kb.groups.join(", ") + ")" : ""} · ${state.kb.type}`;
+  $("tabs").innerHTML = tabs.map(([t, label]) => `<button data-t="${t}" class="${t === state.tab ? "on" : ""}">${label}</button>`).join("");
+  $("tabs").querySelectorAll("button").forEach(b => b.onclick = () => { state.tab = b.dataset.t; openKb(id); });
+  document.querySelectorAll(".kb-list li").forEach(li => li.classList.toggle("active", li.dataset.id === id));
+  const pane = $("pane"); pane.innerHTML = "";
+  history.replaceState(null, "", `#kb=${encodeURIComponent(id)}&tab=${state.tab}`);
+  try { await PANES[state.tab](pane, state.kb, state.page); } catch (e) { fail(pane, e); }
+  state.page = undefined;
+}
+
+function openFromHash() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (h.has("memory")) { state.memoryTab = h.get("memory") || "facts"; return openMemory(); }
+  if (h.get("kb")) { state.tab = h.get("tab") || state.tab; state.page = h.get("page") || undefined; return openKb(h.get("kb")); }
+}
+
+// --- documents ------------------------------------------------------------------------------
+async function documentsPane(pane, kb) {
+  pane.innerHTML = `
+    <form id="upload" class="row">
+      <input type="file" name="file" required>
+      <select name="visibility"><option value="">default visibility</option><option>private</option><option>groups</option><option>all</option></select>
+      <button class="primary">Upload</button>
+      <details style="flex-basis:100%"><summary class="muted">Source citation (optional: otherwise taken from the document itself)</summary>
+        <div class="row"><input name="authors" placeholder="authors (separate with ;)" style="flex:1"><input name="published" placeholder="published (YYYY-MM-DD)">
+          <input name="publisher" placeholder="publisher"><input name="version" placeholder="version"></div>
+        <div class="row"><input name="source_url" placeholder="source URL" style="flex:1"><input name="doi" placeholder="DOI"></div>
+        <div class="row"><input name="citation_text" placeholder="or the full citation as you want it shown" style="flex:1"></div>
+      </details>
+    </form>
+    <form id="add-url" class="row"><input name="url" type="url" placeholder="https://… (a page to ingest)" style="flex:1" required><button>Add URL</button></form>
+    <table><thead><tr><th>Title</th><th>Status</th><th>Visibility</th><th>Version</th><th></th></tr></thead><tbody id="docs"></tbody></table>
+    <div class="row muted" id="docs-more"></div>`;
+  $("upload").onsubmit = async ev => {
+    ev.preventDefault();
+    const form = new FormData(ev.target);
+    for (const k of ["visibility", "authors", "published", "publisher", "version", "source_url", "doi", "citation_text"])
+      if (!form.get(k)) form.delete(k);
+    try { await api(`/knowledge-bases/${kb.id}/knowledge/file`, {method: "POST", body: form}); ev.target.reset(); await listDocs(kb); }
+    catch (e) { fail(pane, e); }
+  };
+  $("add-url").onsubmit = async ev => {
+    ev.preventDefault();
+    try { await api(`/knowledge-bases/${kb.id}/knowledge/url`, {method: "POST", json: {url: ev.target.url.value}}); ev.target.reset(); await listDocs(kb); }
+    catch (e) { fail(pane, e); }
+  };
+  await listDocs(kb);
+}
+
+async function listDocs(kb) {
+  const body = await api(`/knowledge-bases/${kb.id}/knowledge?page_size=100`);
+  $("docs").innerHTML = body.data.map(d => `<tr data-id="${esc(d.id)}">
+    <td>${esc(d.title || d.file_name || d.source)}<div class="muted">${esc((d.citation || {}).text || d.file_name || d.source || d.type)}</div></td>
+    <td><span class="badge ${esc(d.parse_status)}">${esc(d.parse_status)}</span>${d.enable_status !== "enabled" ? ' <span class="badge">disabled</span>' : ""}${d.superseded_by?.length ? ' <span class="badge">superseded</span>' : ""}${d.error_message ? `<div class="error">${esc(d.error_message)}</div>` : ""}</td>
+    <td><select data-act="vis">${["private", "groups", "all"].map(v => `<option ${v === d.visibility ? "selected" : ""}>${v}</option>`).join("")}</select></td>
+    <td>${d.version}</td>
+    <td><button data-act="cite">Citation</button> <button data-act="reparse">Reparse</button> <button data-act="del">Delete</button></td></tr>`).join("") ||
+    `<tr><td colspan="5" class="muted">No documents yet.</td></tr>`;
+  $("docs-more").textContent = body.total > body.data.length ? `${body.total} documents; showing ${body.data.length}.` : "";
+  $("docs").querySelectorAll("tr[data-id]").forEach(tr => {
+    const id = tr.dataset.id;
+    tr.querySelector('[data-act="del"]').onclick = async () => { if (confirm("Delete this document?")) { await api(`/knowledge/${id}`, {method: "DELETE"}); listDocs(kb); } };
+    tr.querySelector('[data-act="reparse"]').onclick = async () => { await api(`/knowledge/${id}/reparse`, {method: "POST"}); listDocs(kb); };
+    tr.querySelector('[data-act="cite"]').onclick = async () => {
+      const d = body.data.find(x => x.id === id), c = d.citation || {};
+      const text = prompt("Citation shown with this document's passages (empty: take it from the document again)", c.text || "");
+      if (text === null) return;
+      try { await api(`/knowledge/${id}`, {method: "PUT", json: {citation: text.trim() ? {citation_text: text.trim()} : null}}); } catch (e) { alert(e.message); }
+      listDocs(kb);
+    };
+    tr.querySelector('[data-act="vis"]').onchange = async ev => {
+      const visibility = ev.target.value;
+      const groups = visibility === "groups" ? (prompt("Groups (comma separated, e.g. org:eic)") || "").split(",").map(s => s.trim()).filter(Boolean) : [];
+      try { await api(`/knowledge/${id}`, {method: "PUT", json: {visibility, groups}}); } catch (e) { alert(e.message); }
+      listDocs(kb);
+    };
+  });
+}
+
+// --- search ------------------------------------------------------------------------------------
+async function searchPane(pane, kb) {
+  pane.innerHTML = `<form id="search" class="row"><input name="q" placeholder="Search this knowledge base" style="flex:1" required><button class="primary">Search</button></form><div id="hits"></div>`;
+  $("search").onsubmit = async ev => {
+    ev.preventDefault();
+    const hits = $("hits"); hits.innerHTML = '<p class="muted">Searching…</p>';
+    try {
+      const data = (await api("/knowledge-search", {method: "POST", json: {query: ev.target.q.value, knowledge_base_ids: [kb.id]}})).data;
+      hits.innerHTML = data.map(h => `<div class="hit"><div class="meta">${esc(h.knowledge_title)} · #${h.chunk_index} · ${h.match_type} · score ${h.score.toFixed(3)}${h.match === "exact" ? ' · <b>exact FAQ match</b>' : ""}${h.deprecated ? " · deprecated" : ""}</div><pre>${esc(h.content)}</pre>${h.citation_text ? `<div class="muted">Source: ${link(h.citation_text, (h.citation || {}).url)}</div>` : ""}</div>`).join("") || '<p class="muted">Nothing found.</p>';
+    } catch (e) { hits.innerHTML = ""; fail(hits, e); }
+  };
+}
+
+// --- agentic search (SSE) --------------------------------------------------------------------------
+function renderAnswer(text, refs) {
+  // escape everything, then turn the expanded <kb …/> tags into numbered marks
+  const parts = String(text).split(/(<(?:kb|wiki|record)\b[^>]*\/>)/g);
+  const seen = new Map();
+  return parts.map(p => {
+    const m = p.match(/^<(?:kb|wiki|record)\b([^>]*)\/>$/);
+    if (!m) return esc(p);
+    const doc = (m[1].match(/doc="([^"]*)"/) || [])[1] || "";
+    const chunk = (m[1].match(/chunk_id="([^"]*)"/) || [])[1] || "";
+    const n = (m[1].match(/ n="(\d+)"/) || [])[1];
+    const source = (m[1].match(/source="([^"]*)"/) || [])[1] || doc;
+    if (!seen.has(chunk)) seen.set(chunk, n || seen.size + 1);
+    return `<sup class="cite" title="${source}">[${seen.get(chunk)}]</sup>`;
+  }).join("");
+}
+
+async function agenticPane(pane, kb) {
+  pane.innerHTML = `<form id="ask">
+      <textarea name="q" placeholder="A question that needs several searches" required></textarea>
+      <div class="row">
+        <select name="preset"><option value="auto">auto (pick the sources)</option><option value="quick">quick (one pass)</option><option value="deep">deep (tool loop)</option>${wikiOn(kb) ? '<option value="wiki">wiki (pages first)</option>' : ""}${FEATURES.web ? '<option value="smart">smart (knowledge + web)</option>' : ""}</select>
+        <select name="output"><option value="answer">answer</option><option value="evidence">evidence only</option></select>
+        <label title="let the tool loop write wiki pages and your memory"><input type="checkbox" name="allow_writes"> allow changes</label>
+        <button class="primary" name="go">Ask</button><button type="button" id="stop" disabled>Stop</button>
+      </div></form>
+    <div class="trail hidden" id="trail"></div><div id="result"></div>`;
+  let controller = null;
+  $("stop").onclick = () => controller && controller.abort();
+  $("ask").onsubmit = async ev => {
+    ev.preventDefault();
+    const f = ev.target, trail = $("trail"), result = $("result");
+    trail.innerHTML = ""; trail.classList.remove("hidden"); result.innerHTML = "";
+    controller = new AbortController(); $("stop").disabled = false; f.go.disabled = true;
+    const log = line => { trail.insertAdjacentHTML("beforeend", `<div>${esc(line)}</div>`); trail.scrollTop = trail.scrollHeight; };
+    let answer = "";
+    try {
+      const r = await fetch(API + "/agentic-search", {method: "POST", credentials: "same-origin", signal: controller.signal,
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({query: f.q.value, knowledge_base_ids: [kb.id], preset: f.preset.value, output: f.output.value,
+                              allow_writes: f.allow_writes.checked, stream: true})});
+      if (!r.ok) { const b = await r.json().catch(() => null); throw new Error(b?.error?.message || "HTTP " + r.status); }
+      const reader = r.body.getReader(), decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const {value, done} = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, {stream: true});
+        let cut;
+        while ((cut = buffer.indexOf("\n\n")) >= 0) {
+          const block = buffer.slice(0, cut); buffer = buffer.slice(cut + 2);
+          const line = block.split("\n").find(l => l.startsWith("data: "));
+          if (!line) continue;
+          const fr = JSON.parse(line.slice(6));
+          if (fr.response_type === "thinking") log("thinking: " + fr.content.slice(0, 300));
+          else if (fr.response_type === "tool_call") log(`→ ${fr.data.tool_name} ${JSON.stringify(fr.data.arguments)}`);
+          else if (fr.response_type === "tool_result") log(`← ${fr.data.tool_name} (${fr.data.duration_ms} ms)${fr.data.success ? "" : " error"}`);
+          else if (fr.response_type === "context_compacted") log("context trimmed");
+          else if (fr.response_type === "answer") { answer += fr.content; result.innerHTML = `<div class="answer">${renderAnswer(answer)}</div>`; }
+          else if (fr.response_type === "error") fail(result, new Error(fr.content));
+          else if (fr.response_type === "complete") showRun(result, fr.data, answer);
+        }
+      }
+    } catch (e) { if (e.name !== "AbortError") fail(result, e); else log("stopped"); }
+    finally { $("stop").disabled = true; f.go.disabled = false; controller = null; }
+  };
+}
+
+const link = (text, url) => url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(text)}</a>` : esc(text);
+
+function showRun(result, data, answer) {
+  const evidence = data.evidence.map((e, i) => `<div class="hit"><div class="meta">${esc(e.knowledge_title || e.title || e.kind)}${e.cited ? " · cited" : ""}${e.reason ? " · " + esc(e.reason) : ""}${e.score != null ? " · " + Number(e.score).toFixed(3) : ""}</div><pre>${esc((e.content || "").slice(0, 1200))}</pre></div>`).join("");
+  const usage = data.usage || {};
+  const route = data.route ? `<p class="muted">route: ${data.route.sources.map(s => `${esc(s)} (${data.route.counts[s] ?? 0})`).join(", ") || "none"}${data.route.reason ? " — " + esc(data.route.reason) : ""}</p>` : "";
+  // the answer text ends with a plain "Sources:" list; show it as links instead
+  const body = answer ? answer.replace(/\n\nSources:[\s\S]*$/, "") : "";
+  const sources = (data.sources || []).length
+    ? `<h3>Sources</h3><ol>${data.sources.map(s => `<li>${link(s.citation_text, s.url)}${s.cited ? "" : ' <span class="muted">(consulted, not cited inline)</span>'}</li>`).join("")}</ol>`
+    : (answer ? '<p class="muted">Sources: none — nothing relevant was found in the knowledge bases.</p>' : "");
+  result.innerHTML = (body ? `<div class="answer">${renderAnswer(body)}</div>` + sources : "") + route +
+    ((data.writes || []).length ? `<h3>Changes made</h3><ul>${data.writes.map(w => `<li>${esc(w.tool)}: ${esc(w.target)} (${esc(w.action)})</li>`).join("")}</ul>` : "") +
+    `<p class="muted">stopped: ${esc(data.stopped)} · ${data.steps.length} step(s) · ${usage.llm_calls || 0} model call(s) · ${usage.input_tokens || 0}+${usage.output_tokens || 0} tokens</p>` +
+    (evidence ? `<h3>Evidence</h3>${evidence}` : "");
+}
+
+// --- tags ---------------------------------------------------------------------------------------------
+async function tagsPane(pane, kb) {
+  pane.innerHTML = `<form id="new-tag" class="row"><input name="name" placeholder="New tag" required><button>Add</button></form>
+    <table><thead><tr><th>Tag</th><th>Documents</th><th>Entries</th><th></th></tr></thead><tbody id="tags"></tbody></table>`;
+  $("new-tag").onsubmit = async ev => {
+    ev.preventDefault();
+    try { await api(`/knowledge-bases/${kb.id}/tags`, {method: "POST", json: {name: ev.target.name.value}}); tagsPane(pane, kb); }
+    catch (e) { fail(pane, e); }
+  };
+  const tags = (await api(`/knowledge-bases/${kb.id}/tags?page_size=100`)).data;
+  $("tags").innerHTML = tags.map(t => `<tr data-id="${esc(t.id)}"><td>${esc(t.name)} <span class="muted">#${t.seq_id}</span></td><td>${t.knowledge_count}</td><td>${t.chunk_count}</td><td><button>Delete</button></td></tr>`).join("") || `<tr><td colspan="4" class="muted">No tags.</td></tr>`;
+  $("tags").querySelectorAll("tr[data-id]").forEach(tr => tr.querySelector("button").onclick = async () => {
+    if (!confirm("Delete this tag and detach it everywhere?")) return;
+    await api(`/knowledge-bases/${kb.id}/tags/${tr.dataset.id}?force=true`, {method: "DELETE"}); tagsPane(pane, kb);
+  });
+}
+
+// --- FAQ ----------------------------------------------------------------------------------------------
+async function faqPane(pane, kb) {
+  const base = `/knowledge-bases/${kb.id}/faq`;
+  pane.innerHTML = `<form id="faq-new">
+      <div class="row"><input name="q" placeholder="Standard question" required style="flex:1"></div>
+      <div class="row"><input name="similar" placeholder="Similar questions, separated by ##" style="flex:1"></div>
+      <textarea name="answers" placeholder="Answers, one per line" required></textarea>
+      <div class="row"><button class="primary">Add entry</button></div></form>
+    <form id="faq-import" class="row"><input type="file" name="file" accept=".csv,.xlsx" required>
+      <select name="mode"><option value="append">append</option><option value="replace">replace all</option></select>
+      <label><input type="checkbox" name="dry_run" value="true"> dry run</label><button>Import</button>
+      <a href="${API + base}/entries/export">Export CSV</a></form>
+    <div id="faq-report"></div>
+    <table><thead><tr><th>#</th><th>Question</th><th>Answers</th><th></th></tr></thead><tbody id="faq"></tbody></table>`;
+  $("faq-new").onsubmit = async ev => {
+    ev.preventDefault();
+    const f = ev.target;
+    try {
+      await api(`${base}/entry`, {method: "POST", json: {standard_question: f.q.value, similar_questions: f.similar.value,
+        answers: f.answers.value.split("\n").map(s => s.trim()).filter(Boolean)}});
+      faqPane(pane, kb);
+    } catch (e) { fail(pane, e); }
+  };
+  $("faq-import").onsubmit = async ev => {
+    ev.preventDefault();
+    const form = new FormData(ev.target);
+    if (!form.get("dry_run")) form.set("dry_run", "false");
+    try {
+      const r = (await api(`${base}/import`, {method: "POST", body: form})).data;
+      $("faq-report").innerHTML = `<p>${r.dry_run ? "Dry run: " : ""}${r.created} created, ${r.updated} updated, ${r.unchanged} unchanged, ${r.deleted} deleted, ${r.failed.length} failed.</p>` +
+        r.failed.map(x => `<div class="error">row ${x.index + 2}: ${esc(x.reason)}</div>`).join("");
+      if (!r.dry_run) listFaq(kb);
+    } catch (e) { fail(pane, e); }
+  };
+  await listFaq(kb);
+}
+
+async function listFaq(kb) {
+  const base = `/knowledge-bases/${kb.id}/faq`;
+  const body = await api(`${base}/entries?page_size=100`);
+  $("faq").innerHTML = body.data.map(e => `<tr data-id="${e.id}"><td>${e.id}</td>
+    <td>${esc(e.standard_question)}${e.similar_questions.length ? `<div class="muted">${e.similar_questions.map(esc).join(" · ")}</div>` : ""}${e.is_enabled ? "" : ' <span class="badge">disabled</span>'}</td>
+    <td>${e.answers.map(a => `<div>${esc(a)}</div>`).join("")}</td>
+    <td><button data-act="toggle">${e.is_enabled ? "Disable" : "Enable"}</button> <button data-act="del">Delete</button></td></tr>`).join("") ||
+    `<tr><td colspan="4" class="muted">No entries yet.</td></tr>`;
+  $("faq").querySelectorAll("tr[data-id]").forEach(tr => {
+    const id = tr.dataset.id;
+    tr.querySelector('[data-act="del"]').onclick = async () => { if (confirm("Delete this entry?")) { await api(`${base}/entries`, {method: "DELETE", json: {ids: [Number(id)]}}); listFaq(kb); } };
+    tr.querySelector('[data-act="toggle"]').onclick = async () => {
+      const enabled = tr.querySelector('[data-act="toggle"]').textContent === "Enable";
+      await api(`${base}/entries/fields`, {method: "PUT", json: {by_id: {[id]: {is_enabled: enabled}}}}); listFaq(kb);
+    };
+  });
+}
+
+// --- freshness ------------------------------------------------------------------------------------------
+async function freshnessPane(pane, kb) {
+  const [stale, conflicts] = await Promise.all([api(`/knowledge-bases/${kb.id}/staleness`), api(`/knowledge-bases/${kb.id}/conflicts`)]);
+  const s = stale.data.summary || {};
+  pane.innerHTML = `<h3>Staleness</h3><p>${Object.entries(s).map(([k, v]) => `${esc(k.replace(/_/g, " "))}: <b>${v}</b>`).join(" · ") || "Nothing to report."}</p>
+    <h3>Open conflicts</h3><table><thead><tr><th>Newer</th><th>Older</th><th>Verdict</th><th></th></tr></thead><tbody id="conflicts"></tbody></table>`;
+  $("conflicts").innerHTML = conflicts.data.map(c => `<tr data-id="${esc(c.id)}"><td>${esc(c.knowledge_title || c.knowledge_id)}</td><td>${esc(c.other_knowledge_title || c.other_knowledge_id)}</td>
+    <td>${esc(c.verdict || "–")} <span class="muted">${(c.similarity || 0).toFixed(2)}</span><div class="muted">${esc(c.explanation)}</div></td>
+    <td><button data-act="dep">Deprecate older</button> <button data-act="dis">Dismiss</button></td></tr>`).join("") || `<tr><td colspan="4" class="muted">No open conflicts.</td></tr>`;
+  $("conflicts").querySelectorAll("tr[data-id]").forEach(tr => {
+    const id = tr.dataset.id;
+    tr.querySelector('[data-act="dep"]').onclick = async () => { await api(`/knowledge-conflicts/${id}`, {method: "PUT", json: {deprecate_older: true}}); freshnessPane(pane, kb); };
+    tr.querySelector('[data-act="dis"]').onclick = async () => { await api(`/knowledge-conflicts/${id}`, {method: "PUT", json: {status: "dismissed"}}); freshnessPane(pane, kb); };
+  });
+}
+
+// --- settings ----------------------------------------------------------------------------------------------
+async function settingsPane(pane, kb) {
+  pane.innerHTML = `<form id="kb-settings">
+    <div class="row"><label>Name <input name="name" value="${esc(kb.name)}"></label></div>
+    <div class="row"><label style="flex:1">Description <textarea name="description">${esc(kb.description)}</textarea></label></div>
+    <div class="row"><label>Visibility <select name="visibility">${["private", "groups", "all"].map(v => `<option ${v === kb.visibility ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+      <label>Groups <input name="groups" value="${esc(kb.groups.join(", "))}" placeholder="org:eic, role:shifter"></label></div>
+    ${FEATURES.wiki && kb.type === "document" ? `<h3>LLM wiki</h3><div class="row"><label><input type="checkbox" name="wiki" ${wikiOn(kb) ? "checked" : ""}> build a wiki from this knowledge base's documents</label>
+      <label>Granularity <select name="granularity">${["focused", "standard", "exhaustive"].map(g => `<option ${(kb.wiki_config || {}).extraction_granularity === g ? "selected" : ""}>${g}</option>`).join("")}</select></label></div>` : ""}
+    ${FEATURES.memory && kb.type === "document" ? `<h3>Memory</h3><div class="row"><label><input type="checkbox" name="memory" ${(kb.memory_config || {}).enabled ? "checked" : ""}> feed processed documents into my memory</label>
+      <label>Group <input name="memory_group" value="${esc((kb.memory_config || {}).group_id || "default")}"></label></div>` : ""}
+    ${kb.type === "records" ? `<h3>Records</h3><div class="row"><label>Default type <input name="default_type" value="${esc((kb.records_config || {}).default_type || "")}" placeholder="experiment_run"></label>
+      <label><input type="checkbox" name="strict" ${(kb.records_config || {}).strict !== false ? "checked" : ""}> strict (reject undeclared fields)</label>
+      <label><input type="checkbox" name="keep_versions" ${(kb.records_config || {}).keep_versions !== false ? "checked" : ""}> keep versions</label></div>` : ""}
+    <div class="row"><button class="primary">Save</button> <button type="button" id="del-kb">Delete knowledge base</button></div></form>`;
+  $("kb-settings").onsubmit = async ev => {
+    ev.preventDefault();
+    const f = ev.target;
+    try {
+      const body = {name: f.name.value, description: f.description.value, visibility: f.visibility.value,
+        groups: f.groups.value.split(",").map(s => s.trim()).filter(Boolean)};
+      if (f.wiki) { body.indexing_strategy = {wiki_enabled: f.wiki.checked}; body.wiki_config = {...(kb.wiki_config || {}), extraction_granularity: f.granularity.value}; }
+      if (f.memory) body.memory_config = {enabled: f.memory.checked, group_id: f.memory_group.value || "default"};
+      if (f.default_type) body.records_config = {...(kb.records_config || {}), default_type: f.default_type.value || null,
+        strict: f.strict.checked, keep_versions: f.keep_versions.checked};
+      await api(`/knowledge-bases/${kb.id}`, {method: "PUT", json: body});
+      if (f.wiki && f.wiki.checked && !wikiOn(kb) && confirm("Build the wiki from the existing documents now?"))
+        await api(`/knowledgebase/${kb.id}/wiki/rebuild`, {method: "POST"});
+      state.kb = null; await loadKbs(kb.id);
+    } catch (e) { fail(pane, e); }
+  };
+  $("del-kb").onclick = async () => {
+    if (!confirm(`Delete "${kb.name}" and everything in it?`)) return;
+    try { await api(`/knowledge-bases/${kb.id}`, {method: "DELETE"}); state.kb = null; $("kb-view").classList.add("hidden"); $("empty").classList.remove("hidden"); loadKbs(); }
+    catch (e) { fail(pane, e); }
+  };
+}
+
+// --- shared helpers (phase 3) ---------------------------------------------------------------------
+const utc = iso => iso ? new Date(iso).toISOString().slice(0, 16).replace("T", " ") + "Z" : "";
+const fmt = v => v == null ? "" : typeof v === "number" ? (Number.isInteger(v) ? String(v) : v.toPrecision(4)) :
+  typeof v === "object" ? JSON.stringify(v) : String(v);
+function table(columns, rows) {
+  if (!rows.length) return '<p class="muted">No rows.</p>';
+  return `<table><thead><tr>${columns.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${
+    rows.map(r => `<tr>${columns.map(c => `<td>${esc(fmt(r[c]))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+function parseJson(text, fallback) {
+  if (!text || !text.trim()) return fallback;
+  try { return JSON.parse(text); } catch (e) { throw new Error("not valid JSON: " + e.message); }
+}
+
+// --- records ------------------------------------------------------------------------------------------
+async function recordsPane(pane, kb) {
+  const types = (await api("/record-types")).data;
+  const typeOptions = types.map(t => `<option value="${esc(t.name)}" ${t.name === (kb.records_config || {}).default_type ? "selected" : ""}>${esc(t.name)}</option>`).join("");
+  pane.innerHTML = `
+    <h3>Upload a file</h3>
+    <form id="rec-upload" class="row">
+      <input type="file" name="file" accept=".csv,.xlsx,.json,.jsonl" required>
+      <select name="record_type"><option value="">default type</option>${typeOptions}</select>
+      <input name="column_map" placeholder='column map, e.g. {"acc": "metrics.accuracy"}' style="flex:1">
+      <button class="primary">Upload</button></form>
+    <div id="rec-uploads"></div>
+    <h3>Add records as JSON</h3>
+    <form id="rec-json"><textarea name="body" placeholder='{"record_type": "experiment_run", "records": [{...}]}'></textarea>
+      <div class="row"><label><input type="checkbox" name="atomic"> all or nothing</label><button>Upsert</button></div></form>
+    <div id="rec-report"></div>
+    <h3>Records</h3>
+    <div class="row"><select id="rec-type"><option value="">all types</option>${typeOptions}</select>
+      <input id="rec-facet" placeholder="facet filter, e.g. model=resnet50"><button id="rec-refresh">Refresh</button></div>
+    <div id="rec-list"></div><div id="rec-detail"></div>`;
+  $("rec-upload").onsubmit = async ev => {
+    ev.preventDefault();
+    const form = new FormData(ev.target);
+    for (const k of ["record_type", "column_map"]) if (!form.get(k)) form.delete(k);
+    try { await api(`/knowledge-bases/${kb.id}/knowledge/file`, {method: "POST", body: form}); ev.target.reset(); listUploads(kb); }
+    catch (e) { fail(pane, e); }
+  };
+  $("rec-json").onsubmit = async ev => {
+    ev.preventDefault();
+    try {
+      const body = parseJson(ev.target.body.value, {});
+      if (ev.target.atomic.checked) body.atomic = true;
+      const r = (await api(`/knowledge-bases/${kb.id}/records`, {method: "POST", json: body})).data;
+      $("rec-report").innerHTML = `<p>${r.created} created, ${r.updated} updated, ${r.unchanged} unchanged, ${r.invalid} invalid${r.written === false ? " — nothing written (atomic)" : ""}.</p>` +
+        r.outcomes.filter(o => o.outcome === "invalid").map(o => `<div class="error">#${o.index}: ${esc(o.errors.join("; "))}</div>`).join("");
+      listRecords(kb);
+    } catch (e) { fail($("rec-report"), e); }
+  };
+  $("rec-refresh").onclick = () => listRecords(kb);
+  $("rec-type").onchange = () => listRecords(kb);
+  await Promise.all([listUploads(kb), listRecords(kb)]);
+}
+
+async function listUploads(kb) {
+  const items = (await api(`/knowledge-bases/${kb.id}/knowledge?page_size=20`)).data;
+  if (!items.length) { $("rec-uploads").innerHTML = ""; return; }
+  $("rec-uploads").innerHTML = table(["file", "status", "report"], items.map(i => {
+    const r = (i.metadata || {}).records_report;
+    return {file: i.file_name || i.title, status: i.parse_status + (i.error_message ? ": " + i.error_message : ""),
+            report: r ? `${r.created} created, ${r.updated} updated, ${r.unchanged} unchanged, ${r.invalid} invalid` : ""};
+  }));
+}
+
+async function listRecords(kb) {
+  const params = new URLSearchParams({page_size: "50"});
+  if ($("rec-type").value) params.set("record_type", $("rec-type").value);
+  const facet = $("rec-facet").value.trim();
+  if (facet.includes("=")) { const [k, v] = facet.split("="); params.set("facet." + k.trim(), v.trim()); }
+  const body = await api(`/knowledge-bases/${kb.id}/records?${params}`);
+  $("rec-list").innerHTML = `<p class="muted">${body.total} record(s)</p>` + (body.data.length ? `<table><thead><tr><th>Name</th><th>Type</th><th>Time</th><th>Facets</th><th>Measures</th><th>v</th></tr></thead><tbody>${
+    body.data.map(r => `<tr data-id="${esc(r.id)}" style="cursor:pointer"><td>${esc(r.name)}${r.deprecated ? ' <span class="badge">deprecated</span>' : ""}</td><td>${esc(r.record_type)}</td>
+      <td>${esc(utc(r.event_time))}</td><td>${esc(Object.entries(r.facets || {}).map(([k, v]) => `${k}=${fmt(v)}`).join(", "))}</td>
+      <td>${esc(Object.entries(r.measures || {}).map(([k, v]) => `${k}=${fmt(v)}`).join(", "))}</td><td>${r.version}</td></tr>`).join("")}</tbody></table>` : "");
+  $("rec-list").querySelectorAll("tr[data-id]").forEach(tr => tr.onclick = async () => {
+    const r = (await api(`/records/${tr.dataset.id}`)).data;
+    $("rec-detail").innerHTML = `<h3>${esc(r.name)} <span class="muted">v${r.version}${r.versions.length ? " (kept: " + r.versions.join(", ") + ")" : ""}</span>
+      <button id="rec-del">Delete</button></h3><pre class="json">${esc(JSON.stringify({data: r.data, items: r.items}, null, 1))}</pre>`;
+    $("rec-del").onclick = async () => { if (confirm("Delete this record?")) { await api(`/records/${r.id}`, {method: "DELETE"}); $("rec-detail").innerHTML = ""; listRecords(kb); } };
+  });
+}
+
+async function queryPane(pane, kb) {
+  const types = (await api("/record-types")).data;
+  pane.innerHTML = `<form id="q-form">
+      <div class="row"><select name="record_type">${types.map(t => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("")}</select>
+        <select name="kind"><option value="query">query</option><option value="aggregate">aggregate</option><option value="similar">similar (probe)</option></select>
+        <label><input type="checkbox" name="all_kbs"> all my records KBs</label></div>
+      <label>Filter (JSON) <textarea name="filter" placeholder='{"and": [{"field": "dataset", "op": "eq", "value": "cifar100"}]}'></textarea></label>
+      <div class="row" id="q-query"><input name="sort" placeholder="sort: metrics.accuracy desc" style="flex:1"><input name="fields" placeholder="fields: model, metrics.accuracy" style="flex:1"></div>
+      <div class="row hidden" id="q-agg"><input name="group_by" placeholder="group by: model, finished_at:month" style="flex:1">
+        <input name="metrics" placeholder="metrics: count, best(metrics.accuracy), p90(metrics.train_hours)" style="flex:2">
+        <select name="scope"><option value="record">records</option><option value="items">items</option></select></div>
+      <label class="hidden" id="q-probe">Probe (JSON) <textarea name="probe" placeholder='{"model": "vit-b16", "params": {"lr": 0.0003}}'></textarea></label>
+      <div class="row"><button class="primary">Run</button></div></form><div id="q-result"></div>`;
+  const f = $("q-form");
+  f.kind.onchange = () => {
+    $("q-query").classList.toggle("hidden", f.kind.value !== "query");
+    $("q-agg").classList.toggle("hidden", f.kind.value !== "aggregate");
+    $("q-probe").classList.toggle("hidden", f.kind.value !== "similar");
+  };
+  f.onsubmit = async ev => {
+    ev.preventDefault();
+    const out = $("q-result");
+    try {
+      const body = {record_type: f.record_type.value};
+      if (!f.all_kbs.checked) body.knowledge_base_ids = [kb.id];
+      const filter = parseJson(f.filter.value, null);
+      if (filter) body.filter = filter;
+      if (f.kind.value === "query") {
+        if (f.sort.value.trim()) body.sort = f.sort.value.split(",").map(s => { const [field, dir] = s.trim().split(/\s+/); return {field, dir: dir || "asc"}; });
+        if (f.fields.value.trim()) body.fields = f.fields.value.split(",").map(s => s.trim()).filter(Boolean);
+        body.limit = 100;
+        const r = (await api("/records/query", {method: "POST", json: body})).data;
+        const cols = r.records.length ? Object.keys(r.records[0].fields) : [];
+        out.innerHTML = `<p class="muted">${r.total} match(es)</p>` + table(["name", ...cols], r.records.map(x => ({name: x.name, ...x.fields})));
+      } else if (f.kind.value === "aggregate") {
+        body.group_by = f.group_by.value.split(",").map(s => s.trim()).filter(Boolean).map(g => g.includes(":") ? {field: g.split(":")[0], bucket: g.split(":")[1]} : g);
+        body.metrics = f.metrics.value.split(/,(?![^(]*\))/).map(s => s.trim()).filter(Boolean).map(m => {
+          const match = m.match(/^(\w+)\((.*)\)$/); return match ? {fn: match[1], field: match[2]} : {fn: m}; });
+        if (!body.metrics.length) body.metrics = [{fn: "count"}];
+        body.scope = f.scope.value;
+        const r = (await api("/records/aggregate", {method: "POST", json: body})).data;
+        out.innerHTML = table(r.columns, r.rows);
+      } else {
+        body.probe = parseJson(f.probe.value, {});
+        const r = (await api("/records/similar", {method: "POST", json: body})).data;
+        out.innerHTML = table(["name", "score", "text", "facets", "features"], r.records.map(x => ({name: x.name, score: x.score, ...x.breakdown})));
+      }
+    } catch (e) { out.innerHTML = ""; fail(out, e); }
+  };
+}
+
+async function typesPane(pane, kb) {
+  const types = (await api("/record-types")).data;
+  pane.innerHTML = `${table(["name", "version", "status", "plugin", "title"], types)}
+    <div id="t-detail"></div>
+    <h3>Register a type</h3>
+    <form id="t-infer" class="row"><input type="file" name="file" accept=".csv,.xlsx,.json,.jsonl" required><input name="name" placeholder="name" required><button>Propose from a file</button></form>
+    <form id="t-register"><textarea name="body" style="min-height:220px" placeholder='{"name": "experiment_run", "schema": {...}, "roles": {...}}'></textarea>
+      <div class="row"><button class="primary">Register</button></div></form>`;
+  pane.querySelectorAll("tbody tr").forEach((tr, i) => { tr.style.cursor = "pointer"; tr.onclick = async () => {
+    const t = types[i];
+    let stats = [];
+    try { stats = (await api(`/record-types/${encodeURIComponent(t.name)}/stats?knowledge_base_id=${kb.id}`)).data; } catch (_) {}
+    $("t-detail").innerHTML = `<h3>${esc(t.name)} v${t.version}</h3><pre class="json">${esc(JSON.stringify({roles: t.roles, aliases: t.aliases, schema: t.schema}, null, 1))}</pre>` +
+      (stats.length ? "<h3>Field statistics (this KB)</h3>" + table(["field", "scope", "count", "min", "max", "distinct_count"], stats) : "");
+  }; });
+  $("t-infer").onsubmit = async ev => {
+    ev.preventDefault();
+    try {
+      const r = (await api("/record-types/infer", {method: "POST", body: new FormData(ev.target)})).data;
+      $("t-register").body.value = JSON.stringify({name: r.name, title: "", schema: r.schema, roles: r.roles}, null, 1);
+    } catch (e) { fail(pane, e); }
+  };
+  $("t-register").onsubmit = async ev => {
+    ev.preventDefault();
+    try { await api("/record-types", {method: "POST", json: parseJson(ev.target.body.value, {})}); typesPane(pane, kb); }
+    catch (e) { fail(pane, e); }
+  };
+}
+
+// --- wiki -------------------------------------------------------------------------------------------------
+function renderWiki(md, known) {
+  const inline = text => esc(text)
+    .replace(/\[\[([^\[\]|]+?)(?:\|([^\[\]]+?))?\]\]/g, (m, slug, title) =>
+      `<a class="wl${known && !known.has(slug) ? " dead" : ""}" data-slug="${slug}">${title || slug}</a>`)
+    .replace(/\[src:(\d+)\]/g, '<sup class="src" title="source passage $1">[$1]</sup>')
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  const out = [];
+  let list = false;
+  for (const line of String(md || "").split("\n")) {
+    const heading = line.match(/^(#{1,3})\s+(.*)$/);
+    const item = line.match(/^\s*[-*]\s+(.*)$/);
+    if (!item && list) { out.push("</ul>"); list = false; }
+    if (heading) out.push(`<h${heading[1].length}>${inline(heading[2])}</h${heading[1].length}>`);
+    else if (item) { if (!list) { out.push("<ul>"); list = true; } out.push(`<li>${inline(item[1])}</li>`); }
+    else if (line.trim()) out.push(`<p>${inline(line)}</p>`);
+  }
+  if (list) out.push("</ul>");
+  return out.join("");
+}
+
+async function wikiPane(pane, kb, slug) {
+  const base = `/knowledgebase/${kb.id}/wiki`;
+  const [pages, stats] = await Promise.all([api(`${base}/pages?page_size=200`), api(`${base}/stats`)]);
+  const known = new Set(pages.data.map(p => p.slug));
+  const groups = {};
+  for (const p of pages.data) (groups[p.category_path || ({summary: "Documents", community: "Communities", index: "", synthesis: "Notes", comparison: "Notes"}[p.page_type] ?? "Pages")] ||= []).push(p);
+  pane.innerHTML = `<div class="row muted">${stats.data.pages} pages · ${stats.data.relations} relations · ${stats.data.pending_ops} pending · ${stats.data.open_issues} open issues</div>
+    <div class="row"><form id="w-search" class="row" style="flex:1"><input name="q" placeholder="search pages (regex)" style="flex:1"><button>Search</button></form>
+      <form id="w-global" class="row" style="flex:1"><input name="q" placeholder="ask about the whole corpus" style="flex:1"><button>Global search</button></form></div>
+    <div class="row"><button id="w-quality">Quality</button><button id="w-issues">Issues</button><button id="w-new">New page</button>
+      <button id="w-links">Rebuild links</button><button id="w-rebuild">Rebuild from documents</button></div>
+    <div class="split"><div class="page-list" id="w-list">${Object.keys(groups).sort().map(g => `<h4>${esc(g || "Index")}</h4>` +
+      groups[g].sort((a, b) => a.title.localeCompare(b.title)).map(p => `<a data-slug="${esc(p.slug)}">${esc(p.title)}</a>`).join("")).join("")
+      || '<p class="muted">No pages yet. Upload documents, or rebuild from documents.</p>'}</div>
+      <div id="w-view"></div></div>`;
+  const open = s => showWikiPage(kb, s, known);
+  $("w-list").querySelectorAll("a").forEach(a => a.onclick = () => open(a.dataset.slug));
+  $("w-search").onsubmit = async ev => {
+    ev.preventDefault();
+    const hits = (await api(`${base}/search?q=${encodeURIComponent(ev.target.q.value)}`)).data;
+    $("w-view").innerHTML = hits.map(h => `<div class="hit"><a class="wl" data-slug="${esc(h.slug)}">${esc(h.title)}</a> <span class="badge">${esc(h.page_type)}</span><div class="muted">${esc(h.summary)}</div></div>`).join("") || '<p class="muted">No match.</p>';
+    $("w-view").querySelectorAll("a.wl").forEach(a => a.onclick = () => open(a.dataset.slug));
+  };
+  $("w-global").onsubmit = async ev => {
+    ev.preventDefault();
+    $("w-view").innerHTML = '<p class="muted">Asking every community…</p>';
+    try {
+      const r = (await api(`${base}/global-search`, {method: "POST", json: {query: ev.target.q.value}})).data;
+      $("w-view").innerHTML = `<div class="answer wiki-page">${renderWiki(r.answer || "No answer.", known)}</div>` +
+        table(["slug", "score", "answer"], r.points);
+      $("w-view").querySelectorAll("a.wl").forEach(a => a.onclick = () => open(a.dataset.slug));
+    } catch (e) { $("w-view").innerHTML = ""; fail($("w-view"), e); }
+  };
+  $("w-quality").onclick = async () => {
+    const [q, lint] = await Promise.all([api(`${base}/quality`), api(`${base}/lint`)]);
+    const m = q.data;
+    $("w-view").innerHTML = `<h3>Checks</h3>${Object.entries(m.checks).map(([k, v]) => `<div class="${v ? "ok-check" : "bad-check"}">${v ? "✓" : "✗"} ${esc(k.replace(/_/g, " "))}</div>`).join("")}
+      <h3>Metrics</h3><div class="kv">${Object.entries(m).filter(([k]) => k !== "checks" && k !== "by_type").map(([k, v]) => `<span class="muted">${esc(k.replace(/_/g, " "))}</span><span>${esc(fmt(v))}</span>`).join("")}</div>
+      <h3>Lint</h3>${table(["slug", "check", "target"], lint.data.findings)}`;
+  };
+  $("w-issues").onclick = async () => {
+    const issues = (await api(`${base}/issues?status=pending`)).data;
+    $("w-view").innerHTML = issues.map(i => `<div class="hit" data-id="${esc(i.id)}"><b>${esc(i.issue_type)}</b> on <a class="wl" data-slug="${esc(i.slug)}">${esc(i.slug)}</a> <span class="muted">${esc(i.reporter)}</span>
+      <div>${esc(i.description)}</div><button data-s="resolved">Resolve</button> <button data-s="ignored">Ignore</button></div>`).join("") || '<p class="muted">No open issues.</p>';
+    $("w-view").querySelectorAll(".hit").forEach(div => div.querySelectorAll("button").forEach(b => b.onclick = async () => {
+      await api(`${base}/issues/${div.dataset.id}/status`, {method: "PUT", json: {status: b.dataset.s}}); div.remove(); }));
+    $("w-view").querySelectorAll("a.wl").forEach(a => a.onclick = () => open(a.dataset.slug));
+  };
+  $("w-new").onclick = () => editWikiPage(kb, null, known);
+  $("w-links").onclick = async () => { await api(`${base}/rebuild-links`, {method: "POST"}); wikiPane(pane, kb); };
+  $("w-rebuild").onclick = async () => {
+    if (!confirm("Queue every document for (re-)ingestion into the wiki? This makes many model calls.")) return;
+    try { const r = (await api(`${base}/rebuild`, {method: "POST"})).data; alert(`${r.queued} document(s) queued.`); } catch (e) { fail(pane, e); }
+  };
+  if (slug) open(slug);
+  else if (known.has("index")) open("index");
+}
+
+async function showWikiPage(kb, slug, known) {
+  const base = `/knowledgebase/${kb.id}/wiki`;
+  const view = $("w-view");
+  document.querySelectorAll("#w-list a").forEach(a => a.classList.toggle("on", a.dataset.slug === slug));
+  let page;
+  try { page = (await api(`${base}/pages/${slug}`)).data; } catch (e) { view.innerHTML = ""; fail(view, e); return; }
+  view.innerHTML = `<div class="row"><h2 style="margin:0;flex:1">${esc(page.title)}</h2><span class="badge">${esc(page.page_type)}</span><span class="muted">v${page.version} · ${esc(page.last_edit_source)}</span></div>
+    ${page.summary ? `<p class="muted">${esc(page.summary)}</p>` : ""}
+    <div class="row">${page.page_type !== "index" ? '<button id="wp-edit">Edit</button><button id="wp-history">History</button><button id="wp-flag">Flag issue</button><button id="wp-del">Delete</button>' : ""}</div>
+    <div class="wiki-page">${renderWiki(page.content, known)}</div>
+    ${page.source_refs.length ? `<h3>Sources</h3><ul>${page.source_refs.map(r => `<li>${esc(r.split("|").slice(1).join("|") || r)}</li>`).join("")}</ul>` : ""}
+    ${page.in_links.length ? `<h3>Linked from</h3>${page.in_links.map(s => `<a class="wl" data-slug="${esc(s)}">${esc(s)}</a>`).join(" · ")}` : ""}`;
+  view.querySelectorAll("a.wl").forEach(a => a.onclick = () => showWikiPage(kb, a.dataset.slug, known));
+  if (page.page_type === "index") return;
+  $("wp-edit").onclick = () => editWikiPage(kb, page, known);
+  $("wp-del").onclick = async () => { if (confirm("Delete this page? Links to it become plain text.")) { await api(`${base}/pages/${slug}`, {method: "DELETE"}); wikiPane($("pane"), kb); } };
+  $("wp-flag").onclick = async () => {
+    const description = prompt("What is wrong with this page?");
+    if (description) await api(`${base}/issues`, {method: "POST", json: {slug, issue_type: "other", description}});
+  };
+  $("wp-history").onclick = async () => {
+    const h = (await api(`${base}/revisions/${slug}`)).data;
+    view.insertAdjacentHTML("beforeend", `<h3>History</h3>` + (h.revisions.map(r => `<div class="row" data-v="${r.version}">v${r.version} · ${esc(r.edit_source)} ${esc(r.editor || "")} · ${esc(r.created_at.slice(0, 16))}
+      <button data-a="view">View</button><button data-a="revert">Revert to this</button></div>`).join("") || '<p class="muted">No earlier versions.</p>'));
+    view.querySelectorAll("[data-v]").forEach(row => row.querySelectorAll("button").forEach(b => b.onclick = async () => {
+      if (b.dataset.a === "view") {
+        const r = (await api(`${base}/revisions/${slug}?version=${row.dataset.v}`)).data;
+        row.insertAdjacentHTML("afterend", `<pre class="json">${esc(r.content)}</pre>`);
+      } else { await api(`${base}/revert`, {method: "POST", json: {slug, version: Number(row.dataset.v)}}); showWikiPage(kb, slug, known); }
+    }));
+  };
+}
+
+function editWikiPage(kb, page, known) {
+  const base = `/knowledgebase/${kb.id}/wiki`;
+  $("w-view").innerHTML = `<form id="wp-form">
+    <div class="row"><input name="title" placeholder="Title" value="${esc(page ? page.title : "")}" style="flex:1" required>
+      ${page ? "" : '<select name="page_type"><option>synthesis</option><option>comparison</option><option>entity</option><option>concept</option></select><input name="folder" placeholder="folder (optional)">'}</div>
+    <input name="summary" placeholder="Summary" value="${esc(page ? page.summary : "")}" style="width:100%">
+    <textarea name="content" style="min-height:300px" required>${esc(page ? page.content : "")}</textarea>
+    <p class="muted">Link pages with [[slug|Title]]. Keep the [src:N] citation markers next to the claims they support.</p>
+    <div class="row"><button class="primary">Save</button><button type="button" id="wp-cancel">Cancel</button></div></form>`;
+  $("wp-cancel").onclick = () => page ? showWikiPage(kb, page.slug, known) : ($("w-view").innerHTML = "");
+  $("wp-form").onsubmit = async ev => {
+    ev.preventDefault();
+    const f = ev.target;
+    try {
+      const saved = page
+        ? (await api(`${base}/pages/${page.slug}`, {method: "PUT", json: {title: f.title.value, summary: f.summary.value, content: f.content.value}})).data
+        : (await api(`${base}/pages`, {method: "POST", json: {title: f.title.value, summary: f.summary.value, content: f.content.value,
+            page_type: f.page_type.value, folder: f.folder.value || undefined}})).data;
+      wikiPane($("pane"), kb, saved.slug);
+    } catch (e) { fail($("w-view"), e); }
+  };
+}
+
+// --- memory (the signed-in user's own) ----------------------------------------------------------------------
+async function openMemory() {
+  state.kb = null;
+  document.querySelectorAll(".kb-list li").forEach(li => li.classList.remove("active"));
+  $("memory-link").classList.add("active");
+  $("empty").classList.add("hidden"); $("kb-view").classList.remove("hidden");
+  $("kb-title").textContent = "My memory";
+  $("kb-meta").textContent = "Episodes you added (or your memory-enabled knowledge bases fed in), the facts extracted from them, and their history. Only you can read it.";
+  const tabs = [["facts", "Facts"], ["episodes", "Episodes"], ["msearch", "Search"]];
+  if (!tabs.some(([t]) => t === state.memoryTab)) state.memoryTab = "facts";
+  $("tabs").innerHTML = tabs.map(([t, label]) => `<button data-t="${t}" class="${t === state.memoryTab ? "on" : ""}">${label}</button>`).join("");
+  $("tabs").querySelectorAll("button").forEach(b => b.onclick = () => { state.memoryTab = b.dataset.t; openMemory(); });
+  const pane = $("pane"); pane.innerHTML = "";
+  history.replaceState(null, "", `#memory=${state.memoryTab}`);
+  try { await ({facts: memoryFacts, episodes: memoryEpisodes, msearch: memorySearch})[state.memoryTab](pane); } catch (e) { fail(pane, e); }
+}
+
+const factRows = facts => facts.map(f => ({source: f.source, relation: f.relation, target: f.target, fact: f.fact,
+  valid: `${f.valid_at ? utc(f.valid_at).slice(0, 10) : "?"} → ${f.invalid_at ? utc(f.invalid_at).slice(0, 10) : "now"}`,
+  learned: utc(f.created_at).slice(0, 10)}));
+
+async function memoryFacts(pane) {
+  pane.innerHTML = `<form id="m-facts" class="row"><input name="q" placeholder="text"><input name="entity" placeholder="entity">
+    <label>as of <input name="as_of" type="date"></label><label><input type="checkbox" name="include_invalid"> include invalidated</label>
+    <input name="group_id" placeholder="group (all)"><button>Show</button></form><div id="m-out"></div>`;
+  const show = async () => {
+    const f = $("m-facts"), params = new URLSearchParams();
+    for (const k of ["q", "entity", "group_id"]) if (f[k].value) params.set(k, f[k].value);
+    if (f.as_of.value) params.set("as_of", f.as_of.value + "T23:59:59Z");
+    if (f.include_invalid.checked) params.set("include_invalid", "true");
+    try { $("m-out").innerHTML = table(["source", "relation", "target", "fact", "valid", "learned"], factRows((await api(`/memory/facts?${params}`)).data)); }
+    catch (e) { $("m-out").innerHTML = ""; fail($("m-out"), e); }
+  };
+  $("m-facts").onsubmit = ev => { ev.preventDefault(); show(); };
+  await show();
+}
+
+async function memoryEpisodes(pane) {
+  pane.innerHTML = `<form id="m-add"><textarea name="content" placeholder="Something to remember: a note, a decision, what happened…" required></textarea>
+    <div class="row"><label>when <input name="reference_time" type="datetime-local"></label><input name="group_id" placeholder="group (default)"><button class="primary">Remember</button></div></form>
+    <div id="m-list"></div>`;
+  const list = async () => {
+    const body = await api("/memory/episodes?page_size=50");
+    $("m-list").innerHTML = body.data.map(e => `<div class="hit" data-id="${esc(e.id)}"><div class="meta">${esc(utc(e.reference_time))} · ${esc(e.source)} · ${esc(e.group_id)} · <span class="badge ${e.status === "processed" ? "completed" : e.status}">${esc(e.status)}</span>
+      <button data-a="del">Forget</button></div><pre>${esc(e.content.slice(0, 600))}</pre>${e.error ? `<div class="error">${esc(e.error)}</div>` : ""}</div>`).join("") || '<p class="muted">Nothing remembered yet.</p>';
+    $("m-list").querySelectorAll(".hit").forEach(div => div.querySelector("button").onclick = async () => {
+      if (!confirm("Forget this episode? Facts only it supported are removed.")) return;
+      const r = (await api(`/memory/episodes/${div.dataset.id}`, {method: "DELETE"})).data;
+      alert(`${r.facts_removed} fact(s) removed, ${r.invalidations_reverted} invalidation(s) reverted.`); list();
+    });
+  };
+  $("m-add").onsubmit = async ev => {
+    ev.preventDefault();
+    const f = ev.target, body = {content: f.content.value};
+    if (f.reference_time.value) body.reference_time = new Date(f.reference_time.value).toISOString();
+    if (f.group_id.value) body.group_id = f.group_id.value;
+    try { await api("/memory/episodes", {method: "POST", json: body}); f.reset(); list(); } catch (e) { fail(pane, e); }
+  };
+  await list();
+}
+
+async function memorySearch(pane) {
+  pane.innerHTML = `<form id="m-search" class="row"><input name="query" placeholder="what do I know about…" style="flex:2" required>
+    <input name="focal_entity" placeholder="around entity"><label>as of <input name="as_of" type="date"></label><button class="primary">Search</button></form><div id="m-out"></div>`;
+  $("m-search").onsubmit = async ev => {
+    ev.preventDefault();
+    const f = ev.target, body = {query: f.query.value};
+    if (f.focal_entity.value) body.focal_entity = f.focal_entity.value;
+    if (f.as_of.value) body.as_of = f.as_of.value + "T23:59:59Z";
+    try { $("m-out").innerHTML = table(["source", "relation", "target", "fact", "valid", "learned"], factRows((await api("/memory/search", {method: "POST", json: body})).data)); }
+    catch (e) { $("m-out").innerHTML = ""; fail($("m-out"), e); }
+  };
+}
+
+const PANES = {documents: documentsPane, search: searchPane, agentic: agenticPane, tags: tagsPane, faq: faqPane,
+               freshness: freshnessPane, settings: settingsPane, records: recordsPane, query: queryPane,
+               types: typesPane, wiki: wikiPane};
+
+$("new-kb").onsubmit = async ev => {
+  ev.preventDefault();
+  const f = ev.target, body = {name: f.name.value, type: f.type.value};
+  if (f.wiki && f.wiki.checked && body.type === "document") body.indexing_strategy = {wiki_enabled: true};
+  try { const kb = (await api("/knowledge-bases", {method: "POST", json: body})).data; f.reset(); await loadKbs(kb.id); }
+  catch (e) { fail($("kbs"), e); }
+};
+
+// status changes arrive on the event stream; refresh the document list when one is shown
+function listen() {
+  if (!window.EventSource) return;
+  const source = new EventSource(API + "/events");
+  let timer = null;
+  source.onmessage = ev => {
+    try { const e = JSON.parse(ev.data); if (!state.kb || e.knowledge_base_id !== state.kb.id || state.tab !== "documents") return; } catch (_) { return; }
+    clearTimeout(timer); timer = setTimeout(() => state.kb && listDocs(state.kb).catch(() => {}), 400);
+  };
+}
+
+loadMe().then(() => loadKbs()).then(openFromHash).catch(e => fail($("kbs"), e)); listen();
+</script>
+</body>
+</html>
