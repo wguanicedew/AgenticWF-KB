@@ -1,0 +1,80 @@
+# Wiki eval set (docs/llm-wiki.md, Testing; docs/roadmap.md, phase 3 acceptance).
+# A small linked corpus about a fictional distributed-computing operation: the same systems
+# appear in several documents, so the wiki has pages to merge and link.
+#
+#   python -m kb_api.evaluate eval/wiki.yaml --url http://localhost:8766 \
+#     --token-file ~/.agenticwf-kb/token --load --wiki --model-id <tool-capable chat model> --json out.json
+#
+# kind: single | multi (the answer needs several documents) | global (about the whole corpus).
+# Recall counts the expected documents found; a wiki page counts through the documents it cites.
+
+corpus:
+  - name: rucio-overview
+    content: |
+      # Rucio overview
+      Rucio is the data management system of the experiment. It decides where datasets live by
+      evaluating replication rules, and asks FTS to copy files between storage endpoints. Rucio
+      keeps the catalogue of every file replica. The Rucio team runs the rule engine and the
+      reaper, which deletes replicas that no rule protects.
+  - name: fts-transfers
+    content: |
+      # FTS transfers
+      FTS, the File Transfer Service, executes the transfers that Rucio requests. Each link
+      between two sites is a channel with a limit on parallel transfers. When a channel is
+      saturated, transfers queue; the FTS operators can raise the limit for a link. Failed
+      transfers are retried three times before FTS reports them back to Rucio.
+  - name: panda-workload
+    content: |
+      # PanDA workload management
+      PanDA schedules the experiment's jobs on the grid. Before a job starts, PanDA asks Rucio
+      whether the input dataset is available at the chosen site; if not, Rucio creates a rule
+      to bring the data there. PanDA sends pilots to the site's batch system, and each pilot
+      pulls a job from PanDA.
+  - name: pilot-release
+    content: |
+      # Pilot 3.7 release notes
+      The pilot is the wrapper that runs a PanDA job on a worker node. Since pilot 3.7.2,
+      stage-out is retried five times instead of three, because Tier-2 storage endpoints time
+      out under load during reprocessing. The heartbeat interval sent to PanDA is now 30 minutes.
+  - name: tier2-storage
+    content: |
+      # Tier-2 storage operations
+      Tier-2 sites provide disk storage endpoints. During reprocessing campaigns their endpoints
+      time out under load, which shows up as failed FTS transfers and failed pilot stage-out.
+      Site admins open a ticket when more than 10 percent of transfers fail within an hour.
+  - name: cric-config
+    content: |
+      # CRIC configuration
+      CRIC is the information system that describes every site: its storage endpoints, its
+      queues and their limits. PanDA reads queue definitions from CRIC, Rucio reads storage
+      endpoints from CRIC, and FTS takes link limits from it. A wrong endpoint in CRIC breaks
+      transfers to that site.
+  - name: monitoring
+    content: |
+      # Monitoring
+      The operations dashboards in Grafana show FTS transfer efficiency per link, PanDA job
+      failures per site, and Rucio rule backlogs. The shifter watches the dashboards and files
+      tickets for sites with persistent failures.
+  - name: shifter-guide
+    content: |
+      # Shifter guide
+      The shifter checks the monitoring dashboards every hour. For a site with failing
+      transfers, first check the FTS channel for saturation, then the site's storage endpoints
+      in CRIC, then open a ticket with the site. For failing jobs, look at the pilot logs.
+
+questions:
+  - {q: "What does Rucio ask FTS to do?", expect: [rucio-overview, fts-transfers], kind: multi}
+  - {q: "Why was the pilot's stage-out retry count changed, and what problem at Tier-2 sites causes it?",
+     expect: [pilot-release, tier2-storage], kind: multi}
+  - {q: "How do PanDA and Rucio cooperate before a job starts, and what runs the job on the worker node?",
+     expect: [panda-workload, pilot-release], kind: multi}
+  - {q: "Which systems read their configuration from CRIC, and what breaks when CRIC is wrong?",
+     expect: [cric-config, fts-transfers], kind: multi}
+  - {q: "A site's transfers are failing: what does the shifter check, in which systems, and when is a ticket opened?",
+     expect: [shifter-guide, fts-transfers, cric-config, tier2-storage], kind: multi}
+  - {q: "What are the main systems of this distributed computing operation and how do they interact?",
+     expect: [rucio-overview, fts-transfers, panda-workload, cric-config], kind: global}
+  - {q: "What are the main causes of failures across the whole operation?",
+     expect: [tier2-storage, fts-transfers, pilot-release, cric-config], kind: global}
+  - {q: "What do the operations people (shifters, site admins, operators) do across the documents?",
+     expect: [shifter-guide, monitoring, tier2-storage, fts-transfers], kind: global}

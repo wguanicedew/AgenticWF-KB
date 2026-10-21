@@ -1,0 +1,28 @@
+# The KB behind Caddy + authsvc (KB_AUTH_MODE=authsvc; docs/run-modes.md).
+#
+# Add this `handle` INSIDE the existing `route` block of the application site
+# (AgenticWF-auth deploy/caddy/sites/agenticwf-*.caddyfile), AFTER `forward_auth` and BEFORE the
+# agent's `reverse_proxy 127.0.0.1:8000`:
+#
+#   handle_path /app/* {
+#       ...
+#       handle {
+#           route {
+#               request_header -X-Auth-*
+#               forward_auth 127.0.0.1:8010 { ... }
+#
+#               handle /kb/* {                      # <-- this snippet
+#                   reverse_proxy 127.0.0.1:8020
+#               }
+#
+#               reverse_proxy 127.0.0.1:8000        # the agent, unchanged
+#           }
+#       }
+#   }
+#
+# handle_path strips only /app, so the KB sees /kb/..., the path authsvc signed: the KB keeps
+# AUTH_BIND_REQUEST=true. Merge deploy/policy.kb.yaml into authsvc's policy.yaml as well.
+
+handle /kb/* {
+	reverse_proxy 127.0.0.1:8020
+}

@@ -1,0 +1,63 @@
+# authsvc route policy for the KB (authsvc mode only): these rules belong in AgenticWF-auth's
+# policy.yaml (/etc/agenticwf/policy.yaml when mounted from the host; docs/deployment.md).
+# authsvc denies every route without a matching rule, so each KB endpoint needs one. First
+# matching rule wins; /kb/** does not overlap with the agent's paths. OpenKB-style read-only
+# POSTs come before the generic write rule.
+#
+# The KB checks the same scopes again in-process (kb_api.deps.require), so the two must agree.
+# Standalone and service modes do not use this file.
+
+required_scopes: [app:access]   # account approval; matches KB_REQUIRED_SCOPES
+rules:
+  - path: /kb/health
+    public: true
+  - path: /kb/static/**
+    methods: [GET, HEAD]
+    public: true
+  # The landing / management page; unauthenticated page loads are redirected to /auth/login.
+  - path: /kb
+    methods: [GET, HEAD]
+    authenticated: true
+  - path: /kb/
+    methods: [GET, HEAD]
+    authenticated: true
+  - path: /kb/api/v1/me
+    methods: [GET]
+    authenticated: true
+    allow_pending: true
+  - path: /kb/api/v1/system/info
+    methods: [GET]
+    authenticated: true
+  - path: /kb/api/v1/system/**
+    scopes: [admin]
+    allow_machine: false
+
+  # read-only POSTs
+  - {path: /kb/api/v1/knowledge-search, methods: [POST], scopes: [knowledge:read]}
+  - {path: /kb/api/v1/knowledge-grep, methods: [POST], scopes: [knowledge:read]}
+  - {path: /kb/api/v1/agentic-search, methods: [POST], scopes: [knowledge:read]}
+  - {path: /kb/api/v1/knowledge-bases/*/hybrid-search, methods: [POST], scopes: [knowledge:read]}
+  - {path: /kb/api/v1/knowledge-bases/*/faq/search, methods: [POST], scopes: [knowledge:read]}
+  - {path: /kb/api/v1/record-types/infer, methods: [POST], scopes: [knowledge:read]}
+  - {path: /kb/api/v1/records/query, methods: [POST], scopes: [knowledge:read]}
+  - {path: /kb/api/v1/records/aggregate, methods: [POST], scopes: [knowledge:read]}
+  - {path: /kb/api/v1/records/similar, methods: [POST], scopes: [knowledge:read]}
+  - {path: /kb/api/v1/records/suggest, methods: [POST], scopes: [knowledge:read]}
+  - {path: /kb/api/v1/record-types/*/ops/suggest, methods: [POST], scopes: [knowledge:read]}
+  - {path: /kb/api/v1/knowledgebase/*/wiki/global-search, methods: [POST], scopes: [knowledge:read]}
+  - {path: /kb/api/v1/memory/search, methods: [POST], scopes: [knowledge:read]}
+  - {path: /kb/api/v1/web-search, methods: [POST], scopes: [knowledge:read]}
+  - {path: /kb/api/v1/web-fetch, methods: [POST], scopes: [knowledge:read]}
+  - {path: /kb/api/v1/web-search-providers/test, methods: [POST], scopes: [knowledge:read]}
+  - {path: /kb/api/v1/web-search-providers/*/test, methods: [POST], scopes: [knowledge:read]}
+  # the MCP endpoint (Streamable HTTP, read-only tools)
+  - {path: /kb/mcp, methods: [POST, GET], scopes: [knowledge:read]}
+
+  # people-only writes: KB and model management
+  - {path: /kb/api/v1/knowledge-bases, methods: [POST], scopes: [knowledge:write], allow_machine: false}
+  - {path: /kb/api/v1/knowledge-bases/*, methods: [PUT, DELETE], scopes: [knowledge:write], allow_machine: false}
+  - {path: /kb/api/v1/models/**, methods: [POST, PUT, DELETE], scopes: [knowledge:write], allow_machine: false}
+
+  # other writes: M2M allowed (pipelines that push knowledge)
+  - {path: /kb/api/v1/**, methods: [POST, PUT, PATCH, DELETE], scopes: [knowledge:write]}
+  - {path: /kb/api/v1/**, methods: [GET, HEAD], scopes: [knowledge:read]}

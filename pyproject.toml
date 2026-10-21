@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agenticwf-kb"
+version = "0.1.0"
+description = "AgenticWF knowledge service: knowledge bases, hybrid search and agentic search"
+license = "Apache-2.0"
+authors = [{name = "Wen Guan", email = "wen.guan@cern.ch"}]
+requires-python = ">=3.11"
+# Also needs `agenticwf-authsvc` (AuthContext signing and verification), which is not on PyPI.
+# Install it from the AgenticWF-auth repository first:
+#   pip install ../AgenticWF-auth/authsvc
+#   pip install "git+https://github.com/InnovateAILab/AgenticWF-auth.git@<tag>#subdirectory=authsvc"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2",
+    "SQLAlchemy[asyncio]>=2.0.30",
+    "alembic",
+    "retrying",
+    "psycopg[binary]>=3.2",   # PostgreSQL driver, sync and async (kb_core.orm)
+    "PyYAML>=6.0",
+    "cryptography>=42",       # SecretBox: secrets stored encrypted in the database
+    "pgvector>=0.3",          # halfvec column type (kb_embeddings)
+    "httpx>=0.27",            # model clients (OpenAI-compatible), URL import
+    "python-multipart>=0.0.9",   # file uploads
+    "jsonschema>=4.21",       # record types (phase 3, docs/structured-records.md)
+    "networkx>=3.2",          # wiki communities, Louvain (phase 3, docs/llm-wiki.md)
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "httpx>=0.27"]
+# The Python client's Optuna warm-start helper (kb_client.hpo, docs/hpo-warm-start.md).
+hpo = ["optuna>=3.6"]
+# Document parsers (phase 1, docs/ingestion.md).
+parsers = [
+    "pypdfium2>=4",
+    "python-docx>=1.1",
+    "openpyxl>=3.1",
+    "python-pptx>=1.0",
+    "ebooklib>=0.18",
+    "trafilatura>=1.12",
+    "markdownify>=0.13",
+    "pillow>=10",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["kb_api*", "kb_core*", "kb_runtime*", "kb_client*"]
+
+[project.scripts]
+agenticwf-kb = "kb_api.cli:main"                 # API keys and the admin key (docs/run-modes.md)
+agenticwf-kb-worker = "kb_api.worker:main"       # a worker process beside the API (docs/ingestion.md)
+
+[tool.setuptools.package-data]
+"kb_core.orm.base.alembic" = ["script.py.mako", "README"]
+kb_runtime = ["defaults/prompts/*.yaml"]
+kb_api = ["web/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

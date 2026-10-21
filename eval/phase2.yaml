@@ -1,0 +1,59 @@
+# Phase-2 eval set (docs/roadmap.md, phase 2 acceptance): plain search vs agentic search.
+# Run: python -m kb_api.evaluate eval/phase2.yaml --url http://localhost:8766 \
+#        --token-file ~/.agenticwf-kb/token --load
+# `expect` names the corpus document(s) that answer the question; several = a multi-document question.
+
+corpus:
+  - name: pilot-3.7
+    content: |
+      # Pilot 3.7 release notes
+      Stage-out retries were raised from 3 to 5 in pilot 3.7.2 because of storage timeouts at
+      Tier-2 sites. The heartbeat interval is now 30 minutes.
+  - name: pilot-3.6
+    content: |
+      # Pilot 3.6 release notes
+      Stage-out is retried 3 times. Error E-2201 means the copy tool failed; the pilot then
+      reports the job as failed with the copy tool's exit code.
+  - name: storage
+    content: |
+      # Storage operations
+      Tier-2 storage endpoints time out under load during reprocessing campaigns. Raise a ticket
+      with the site when more than 10 % of transfers fail in an hour.
+  - name: cryostat
+    content: |
+      # Cryostat
+      The cryostat pressure alarm threshold is 1.2 bar. When it fires, call the cryo expert on
+      the number in the control room; never vent the cryostat yourself.
+  - name: magnet
+    content: |
+      # Magnet
+      The solenoid is ramped down before any access to the experimental hall. The ramp takes
+      about 40 minutes.
+  - name: shift
+    content: |
+      # Shift duties
+      The shift leader signs the logbook at 07:00, 15:00 and 23:00 every day, and requests hall
+      access from the run coordinator.
+  - name: calorimeter
+    content: |
+      # Calorimeter
+      High-voltage trips of the hadronic calorimeter are reset from the slow control panel.
+      Three trips within an hour: call the calorimeter on-call expert.
+  - name: network
+    content: |
+      # Network
+      Transfers to Tier-2 sites go through FTS; check the channel saturation first, then the
+      site's storage status.
+
+questions:
+  - {q: "What is the cryostat pressure alarm threshold?", expect: cryostat}
+  - {q: "How do I reset a calorimeter HV trip?", expect: calorimeter}
+  - {q: "What does error E-2201 mean?", expect: pilot-3.6}
+  - {q: "How long does the solenoid ramp take?", expect: magnet}
+  - {q: "When does the shift leader sign the logbook?", expect: shift}
+  # multi-document: the answer needs two or more documents found one after the other
+  - {q: "How many stage-out retries did the pilot make before 3.7.2 and after, and why did it change?",
+     expect: [pilot-3.7, pilot-3.6, storage]}
+  - {q: "Who requests hall access and what must happen to the magnet first?", expect: [shift, magnet]}
+  - {q: "Transfers to a Tier-2 site keep timing out: what do I check and when do I open a ticket?",
+     expect: [network, storage]}
