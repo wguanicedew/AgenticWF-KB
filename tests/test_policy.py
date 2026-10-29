@@ -12,7 +12,7 @@ POLICY = Path(__file__).resolve().parents[1] / "deploy" / "policy.kb.yaml"
 
 @pytest.fixture(scope="module")
 def policy():
-    from authsvc.authz import Policy
+    from agenticwf.auth.authz import Policy
 
     return Policy.load(POLICY)
 
@@ -49,8 +49,8 @@ def test_people_only_kb_management(policy):
 
 
 def test_every_authsvc_route_has_a_rule(policy):
-    from kb_api.app import create_app
-    from kb_api.settings import Settings
+    from agenticwf.kb.api.app import create_app
+    from agenticwf.kb.api.settings import Settings
 
     app = create_app(Settings(mode="authsvc", context_secret=b"s" * 48))
     for route in app.routes:

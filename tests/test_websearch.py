@@ -12,8 +12,8 @@ import httpx
 import pytest
 
 from conftest import Caller, drain, make_client, user
-from kb_runtime.websearch.fetch import FetchCache, fetch_page
-from kb_runtime.websearch.providers import Provider, WebResult, canonical_url, dedupe, parse_duckduckgo
+from agenticwf.kb.runtime.websearch.fetch import FetchCache, fetch_page
+from agenticwf.kb.runtime.websearch.providers import Provider, WebResult, canonical_url, dedupe, parse_duckduckgo
 from test_agentic import ScriptedChat, call, chat_model
 from test_citations import pdf
 
@@ -82,7 +82,7 @@ def test_every_provider(kind, params, expect):
     if kind in ("tavily", "bocha"):
         assert headers["Authorization"] == "Bearer k" and results[0].content
     if kind in ("tavily", "brave", "bing", "google", "exa", "bocha"):
-        from kb_runtime.websearch.providers import WebSearchError
+        from agenticwf.kb.runtime.websearch.providers import WebSearchError
         with pytest.raises(WebSearchError):
             run(Provider(kind, {k: v for k, v in params.items() if k != "api_key"},
                          transport=httpx.MockTransport(handler)).search("x"))
@@ -316,3 +316,53 @@ def test_regenerate_summary(client):
     assert ok(alice.post(f"/kb/api/v1/knowledge/{doc['id']}/regenerate-summary"))["queued"] is True
     drain(client)
     assert ok(alice.get(f"/kb/api/v1/knowledge/{doc['id']}"))["description"] == "Summary 2."
+
+
+def test_each_user_picks_a_default_and_switches_providers_off(client, site):
+    import uuid
+
+    import sqlalchemy as sa
+
+    from agenticwf.kb.core.orm.base.session import get_engine
+    from agenticwf.kb.runtime.websearch.service import NAMESPACE
+
+    system_id = str(uuid.uuid5(NAMESPACE, "sysddg"))
+    with get_engine().begin() as conn:               # an operator's provider, the deployment default
+        conn.execute(sa.text("INSERT INTO kb_web_search_providers (id, owner_subject, name, kind, parameters, "
+                             "is_default, is_builtin, status, created_at, updated_at) VALUES (:i, 'system', 'sysddg', "
+                             "'duckduckgo', '{}', true, true, 'active', now(), now())"), {"i": system_id})
+    alice, bob = Caller(client, user("alice", RW, org="eic")), Caller(client, user("bob", RW, org="atlas"))
+    brave = ok(alice.post("/kb/api/v1/web-search-providers", json={"name": "brave", "kind": "brave",
+                                                                   "parameters": {"api_key": "k-1234"}}))
+    mock_search(client, site)
+    prefs = ok(alice.get("/kb/api/v1/web-search/preferences"))
+    assert prefs["default"] is None and prefs["effective"]["name"] == "sysddg"
+    listed = {p["name"]: p for p in ok(alice.get("/kb/api/v1/web-search-providers"))}
+    assert listed["sysddg"]["is_my_default"] and listed["brave"]["enabled"] and not listed["brave"]["is_my_default"]
+
+    # her default: her searches (and the agent's web_search) use it; bob is unaffected
+    ok(alice.put("/kb/api/v1/web-search/preferences", json={"default": brave["id"]}))
+    assert ok(alice.post("/kb/api/v1/web-search", json={"query": "rucio", "fetch_top": 0}))["providers"] == ["brave"]
+    assert ok(bob.get("/kb/api/v1/web-search/preferences"))["effective"]["name"] == "sysddg"
+    assert alice.put("/kb/api/v1/web-search/preferences", json={"disabled": [brave["id"]]}).status_code == 400
+
+    # switching the deployment's provider off, for her only
+    prefs = ok(alice.put("/kb/api/v1/web-search/preferences", json={"disabled": ["system:sysddg"]}))
+    assert prefs["disabled"] == [system_id]
+    named = alice.post("/kb/api/v1/web-search", json={"query": "rucio", "provider_id": "system:sysddg"})
+    assert named.status_code == 400 and "switched" in named.text
+    assert not {p["name"]: p for p in ok(alice.get("/kb/api/v1/web-search-providers"))}["sysddg"]["enabled"]
+    assert ok(bob.post("/kb/api/v1/web-search", json={"query": "rucio", "fetch_top": 0}))["providers"] == ["duckduckgo"]
+
+    # no default of hers and the deployment's off: the first provider she has on
+    prefs = ok(alice.put("/kb/api/v1/web-search/preferences", json={"default": None}))
+    assert prefs["effective"]["name"] == "brave"
+    # all off: no provider
+    ok(alice.put("/kb/api/v1/web-search/preferences", json={"disabled": [brave["id"], system_id]}))
+    assert ok(alice.get("/kb/api/v1/web-search/preferences"))["effective"] is None
+    assert alice.post("/kb/api/v1/web-search", json={"query": "rucio"}).status_code == 400
+    # marking her own provider default (the older API) switches it on and makes it hers
+    ok(alice.put(f"/kb/api/v1/web-search-providers/{brave['id']}", json={"is_default": True}))
+    prefs = ok(alice.get("/kb/api/v1/web-search/preferences"))
+    assert prefs["default"] == brave["id"] and prefs["disabled"] == [system_id]
+    assert alice.put("/kb/api/v1/web-search/preferences", json={"default": "nope"}).status_code == 404

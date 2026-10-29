@@ -7,7 +7,7 @@ import threading
 
 import pytest
 
-from kb_runtime.ingestion.parsers import ParseError, normalise, parse
+from agenticwf.kb.runtime.ingestion.parsers import ParseError, normalise, parse
 
 
 def minimal_pdf(text: str) -> bytes:
@@ -146,8 +146,8 @@ def local_server():
 
 
 def test_private_addresses_are_refused(local_server, monkeypatch):
-    from kb_runtime.security import ssrf
-    from kb_runtime.security.ssrf import FetchError, fetch
+    from agenticwf.kb.runtime.security import ssrf
+    from agenticwf.kb.runtime.security.ssrf import FetchError, fetch
 
     monkeypatch.setattr(ssrf, "whitelist", lambda: (set(), []))
 
@@ -158,7 +158,7 @@ def test_private_addresses_are_refused(local_server, monkeypatch):
 
 
 def test_whitelisted_server_is_fetched_and_redirects_rechecked(local_server, monkeypatch):
-    from kb_runtime.security import ssrf
+    from agenticwf.kb.runtime.security import ssrf
 
     monkeypatch.setattr(ssrf, "whitelist", lambda: (set(), [__import__("ipaddress").ip_network("127.0.0.0/8")]))
     page = asyncio.run(ssrf.fetch(local_server + "/page"))

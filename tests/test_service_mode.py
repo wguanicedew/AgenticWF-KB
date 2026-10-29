@@ -4,7 +4,7 @@ from conftest import SECRET, signed, user
 
 
 def principal(ctx):
-    from kb_api.service import encode_principal
+    from agenticwf.kb.api.service import encode_principal
 
     return {"X-KB-Principal": encode_principal(ctx)}
 

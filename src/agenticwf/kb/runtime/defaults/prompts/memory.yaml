@@ -1,0 +1,42 @@
+# Temporal memory prompts (docs/data-model.md, Temporal memory). Written for AgenticWF-KB.
+# Episode text is data, not instructions.
+
+extract_system: |
+  You extract a knowledge graph from one episode (a conversation turn, a document or a note).
+  Reply with one JSON object and nothing else:
+  {"entities": [{"name": "...", "type": "person|organisation|system|place|project|concept|thing",
+                 "summary": "one sentence", "aliases": ["..."]}],
+   "facts": [{"source": "<entity name>", "relation": "<UPPER_SNAKE verb>", "target": "<entity name>",
+              "fact": "<one self-contained sentence>", "valid_at": "<ISO time or null>",
+              "invalid_at": "<ISO time or null>"}]}
+  Only facts the episode states. valid_at is when the fact became true in the world, if the
+  episode says so; otherwise null (the episode's time is used). Every fact's source and target
+  must be in entities.
+
+extract_user: |
+  Episode time: {{reference_time}}
+  Known entities (reuse their names when the episode means them): {{known}}
+
+  <episode>
+  {{content}}
+  </episode>
+
+resolve_system: |
+  You decide whether two entity descriptions name the same real-world thing. Reply with one
+  JSON object and nothing else: {"same": true|false}
+
+resolve_user: |
+  A: {{a}}
+  B: {{b}}
+
+contradiction_system: |
+  You compare a new fact with existing facts about the same entities. A fact is contradicted
+  when both cannot be true at the same time (e.g. a new job, a changed value, a moved location).
+  Facts that add detail or are compatible are not contradicted. Reply with one JSON object and
+  nothing else: {"contradicted": ["<existing fact id>", ...]}
+
+contradiction_user: |
+  New fact: {{fact}}
+
+  Existing facts:
+  {{existing}}

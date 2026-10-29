@@ -1,5 +1,5 @@
 # Phase-2 eval set (docs/roadmap.md, phase 2 acceptance): plain search vs agentic search.
-# Run: python -m kb_api.evaluate eval/phase2.yaml --url http://localhost:8766 \
+# Run: python -m agenticwf.kb.api.evaluate eval/phase2.yaml --url http://localhost:8766 \
 #        --token-file ~/.agenticwf-kb/token --load
 # `expect` names the corpus document(s) that answer the question; several = a multi-document question.
 

@@ -5,18 +5,18 @@ from conftest import user
 
 
 def test_init_is_idempotent_and_reaches_head(database):
-    from kb_api.db import init_db
-    from kb_core.orm.base.session import get_engine
+    from agenticwf.kb.api.db import init_db
+    from agenticwf.kb.core.orm.base.session import get_engine
 
     init_db()   # second time: nothing to do
     with get_engine().connect() as conn:
-        assert conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar() == "0006"
+        assert conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar() == "0009"
 
 
 def test_missing_extension_is_a_clear_error(database, monkeypatch):
-    from kb_core.common.exceptions import DatabaseException
-    from kb_core.orm.base import utils
-    from kb_core.orm.base.session import get_engine
+    from agenticwf.kb.core.common.exceptions import DatabaseException
+    from agenticwf.kb.core.orm.base import utils
+    from agenticwf.kb.core.orm.base.session import get_engine
 
     monkeypatch.setattr(utils, "required_extensions", lambda: ("vector", "no_such_extension"))
     with pytest.raises(DatabaseException) as err:
@@ -28,7 +28,7 @@ def test_missing_extension_is_a_clear_error(database, monkeypatch):
 def test_async_session_runs_on_the_running_loop(database):
     import asyncio
 
-    from kb_core.orm.base.session import async_session_scope, dispose_async_engine
+    from agenticwf.kb.core.orm.base.session import async_session_scope, dispose_async_engine
 
     async def probe():
         async with async_session_scope(commit=False) as session:
@@ -40,8 +40,8 @@ def test_async_session_runs_on_the_running_loop(database):
 
 
 def test_psycopg2_url_is_refused():
-    from kb_core.common.exceptions import AgenticWFException
-    from kb_core.orm.base.session import _async_url
+    from agenticwf.kb.core.common.exceptions import AgenticWFException
+    from agenticwf.kb.core.orm.base.session import _async_url
 
     with pytest.raises(AgenticWFException):
         _async_url("postgresql+psycopg2://kb@/kb")
@@ -49,7 +49,7 @@ def test_psycopg2_url_is_refused():
 
 
 def test_secret_box_round_trip_and_tamper():
-    from kb_runtime.security.secrets import SecretBox, SecretsUnavailable
+    from agenticwf.kb.runtime.security.secrets import SecretBox, SecretsUnavailable
 
     box = SecretBox(SecretBox.generate_key())
     token = box.encrypt("sk-live-123")
@@ -59,7 +59,7 @@ def test_secret_box_round_trip_and_tamper():
 
 
 def test_secret_box_from_environment(tmp_path, monkeypatch):
-    from kb_runtime.security.secrets import SecretBox
+    from agenticwf.kb.runtime.security.secrets import SecretBox
 
     monkeypatch.delenv("KB_SECRETS_KEY", raising=False)
     monkeypatch.delenv("KB_SECRETS_KEY_FILE", raising=False)
@@ -71,7 +71,7 @@ def test_secret_box_from_environment(tmp_path, monkeypatch):
 
 
 def test_principal_groups_prefixes_every_source():
-    from kb_runtime.access import normalise_group, principal_groups
+    from agenticwf.kb.runtime.access import normalise_group, principal_groups
 
     ctx = user(org="eic", roles=("researcher",), groups=["atlas", "kb:ops"])
     assert principal_groups(ctx) == ["idp:atlas", "kb:ops", "org:eic", "role:researcher"]
@@ -79,8 +79,18 @@ def test_principal_groups_prefixes_every_source():
     assert normalise_group("atlas") == "kb:atlas" and normalise_group("org:eic") == "org:eic"
 
 
+def test_principal_groups_include_every_organization():
+    from dataclasses import replace
+
+    from agenticwf.kb.runtime.access import group_names, principal_groups
+
+    ctx = replace(user(org="eic"), organizations={"o1": "EIC", "o2": "Ops"})   # authsvc's memberships
+    assert principal_groups(ctx) == ["org:eic", "org:o1", "org:o2"]
+    assert group_names(ctx) == {"org:o1": "EIC", "org:o2": "Ops"}
+
+
 def test_service_bind_guard(monkeypatch):
-    from kb_api.settings import service_bind_allowed
+    from agenticwf.kb.api.settings import service_bind_allowed
 
     monkeypatch.delenv("KB_SERVICE_ALLOW_REMOTE", raising=False)
     assert service_bind_allowed("unix:/run/agenticwf-kb/kb.sock")
@@ -91,7 +101,7 @@ def test_service_bind_guard(monkeypatch):
 
 
 def test_settings_validate_mode_and_base_path():
-    from kb_api.settings import Settings
+    from agenticwf.kb.api.settings import Settings
 
     with pytest.raises(ValueError):
         Settings(mode="local")

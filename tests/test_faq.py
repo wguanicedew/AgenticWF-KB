@@ -5,7 +5,7 @@ import io
 import pytest
 
 from conftest import Caller, drain, make_client, user
-from kb_runtime.faq import rules
+from agenticwf.kb.runtime.faq import rules
 
 RW = ("app:access", "knowledge:read", "knowledge:write")
 
@@ -215,7 +215,7 @@ def test_management_page(client, alice):
 
 def test_faq_feature_switch(client, alice, monkeypatch):
     kb_id = faq_kb(alice)
-    from kb_runtime import features
+    from agenticwf.kb.runtime import features
     monkeypatch.setattr(features, "enabled", lambda name: name != "faq")
     assert alice.get(f"/kb/api/v1/knowledge-bases/{kb_id}/faq/entries").status_code == 404
     assert alice.post("/kb/api/v1/knowledge-bases", json={"name": "x", "type": "faq"}).status_code == 400

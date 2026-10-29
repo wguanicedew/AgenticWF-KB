@@ -162,3 +162,107 @@ def test_kb_documents_feed_memory_and_recall_tool(client, alice):
     recalled, history = [m["content"] for m in fake.calls[1]["messages"] if m["role"] == "tool"]
     assert "The pilot retries stage-out 5 times." in recalled and 'relation="RETRIES"' in recalled
     assert '<history entity="Pilot">' in history
+
+
+def test_forget_one_fact_or_an_entity(client, alice):
+    chat_default(client, alice)
+    episode(alice, "Alice works at CERN since 2025.", "2026-01-01T00:00:00Z")
+    drain(client)
+    episode(alice, "Alice moved to DESY.", "2026-06-01T00:00:00Z")
+    drain(client)
+    desy = ok(alice.get("/kb/api/v1/memory/facts"))[0]
+    bob = Caller(client, user("bob", RW, org="atlas"))
+    assert bob.delete(f"/kb/api/v1/memory/facts/{desy['id']}").status_code == 404
+
+    # one fact: the invalidation it caused is reverted, its episodes are named (they keep the text)
+    result = ok(alice.delete(f"/kb/api/v1/memory/facts/{desy['id']}"))
+    assert result["invalidations_reverted"] == 1 and result["episode_ids"] == desy["episode_ids"]
+    assert [f["fact"] for f in ok(alice.get("/kb/api/v1/memory/facts"))] == ["Alice works at CERN."]
+
+    # an entity, with every fact about it
+    cern = [e for e in ok(alice.get("/kb/api/v1/memory/entities")) if e["name"] == "CERN"][0]
+    assert bob.delete(f"/kb/api/v1/memory/entities/{cern['id']}").status_code == 404
+    result = ok(alice.delete(f"/kb/api/v1/memory/entities/{cern['id']}"))
+    assert result["facts_removed"] == 1
+    assert ok(alice.get("/kb/api/v1/memory/facts?include_invalid=true")) == []
+    assert "CERN" not in [e["name"] for e in ok(alice.get("/kb/api/v1/memory/entities"))]
+    assert alice.get(f"/kb/api/v1/memory/entities/{cern['id']}").status_code == 404
+
+
+def test_redact_memory(client, alice):
+    import sqlalchemy as sa
+
+    from agenticwf.kb.core.orm.base.session import get_engine
+
+    chat_default(client, alice)
+    first = episode(alice, "Alice works at CERN since 2025.", "2026-01-01T00:00:00Z")
+    drain(client)
+    preview = ok(alice.post("/kb/api/v1/memory/redact", json={"terms": ["CERN"], "dry_run": True}))
+    assert preview == {"dry_run": True, "episodes": 1, "facts": 1, "entities": 1, "matches": 3}
+    assert ok(alice.get("/kb/api/v1/memory/facts"))[0]["fact"] == "Alice works at CERN."
+
+    done = ok(alice.post("/kb/api/v1/memory/redact", json={"terms": ["CERN"]}))
+    assert done["matches"] == 3
+    assert ok(alice.get(f"/kb/api/v1/memory/episodes/{first['id']}"))["content"] == \
+        "Alice works at [REDACTED] since 2025."
+    assert ok(alice.get("/kb/api/v1/memory/facts"))[0]["fact"] == "Alice works at [REDACTED]."
+    assert "CERN" not in str(ok(alice.get("/kb/api/v1/memory/entities")))
+    with get_engine().connect() as conn:          # the old vectors are gone until re-embedded
+        assert conn.execute(sa.text("SELECT count(*) FROM kb_memory_facts WHERE embedding IS NULL")).scalar() == 1
+    drain(client)
+    with get_engine().connect() as conn:
+        assert conn.execute(sa.text("SELECT count(*) FROM kb_memory_facts WHERE embedding IS NULL")).scalar() == 0
+        assert conn.execute(sa.text("SELECT count(*) FROM kb_memory_entities WHERE embedding IS NULL")).scalar() == 0
+    # another user's redaction never touches alice's memory
+    bob = Caller(client, user("bob", RW, org="atlas"))
+    assert ok(bob.post("/kb/api/v1/memory/redact", json={"terms": ["Alice"]}))["matches"] == 0
+
+
+def test_redacting_a_document_reaches_the_memory_it_fed(client, alice):
+    chat_default(client, alice)
+    kb = ok(alice.post("/kb/api/v1/knowledge-bases", json={"name": "Ops", "memory_config": {"enabled": True,
+                                                                                            "group_id": "ops"}}), 201)
+    item = ok(alice.post(f"/kb/api/v1/knowledge-bases/{kb['id']}/knowledge/manual",
+                         json={"title": "Pilot doc", "content": "# Pilot\n\nThe pilot retries stage-out 5 times."}), 201)
+    episode(alice, "Unrelated: the stage-out of the other system.", "2026-01-01T00:00:00Z")
+    drain(client)
+    report = ok(alice.post(f"/kb/api/v1/knowledge/{item['id']}/redact", json={"terms": ["5 times"]}))
+    assert report["memory"]["episodes"] == 1 and report["memory"]["facts"] == 1
+    facts = ok(alice.get("/kb/api/v1/memory/facts?group_id=ops"))
+    assert facts[0]["fact"] == "The pilot retries stage-out [REDACTED]."
+    episodes = ok(alice.get("/kb/api/v1/memory/episodes?group_id=ops"))
+    assert all("5 times" not in e["content"] for e in episodes)
+
+
+def test_deleting_a_document_forgets_the_memory_it_fed(client, alice):
+    chat_default(client, alice)
+    kb = ok(alice.post("/kb/api/v1/knowledge-bases", json={"name": "Ops", "memory_config": {"enabled": True,
+                                                                                            "group_id": "ops"}}), 201)
+    item = ok(alice.post(f"/kb/api/v1/knowledge-bases/{kb['id']}/knowledge/manual",
+                         json={"title": "Pilot doc", "content": "# Pilot\n\nThe pilot retries stage-out 5 times."}), 201)
+    mine = episode(alice, "Alice works at CERN since 2025.", "2026-01-01T00:00:00Z")
+    drain(client)
+    assert len(ok(alice.get("/kb/api/v1/memory/facts?group_id=ops"))) == 1
+    ok(alice.delete(f"/kb/api/v1/knowledge/{item['id']}"))
+    assert ok(alice.get("/kb/api/v1/memory/episodes?group_id=ops")) == []
+    assert ok(alice.get("/kb/api/v1/memory/facts?group_id=ops&include_invalid=true")) == []
+    assert ok(alice.get(f"/kb/api/v1/memory/episodes/{mine['id']}"))["status"] == "processed"   # her own stays
+
+
+def test_knowledge_bases_section_sets_what_a_new_document_kb_starts_with(client, alice, monkeypatch):
+    from agenticwf.kb.runtime import features
+
+    assert ok(alice.post("/kb/api/v1/knowledge-bases", json={"name": "Plain"}), 201)["memory_config"] == {
+        "enabled": False}
+    has, get = features.config_has_option, features.config_get
+    on = {("knowledge_bases", "wiki_enabled"): "true", ("knowledge_bases", "memory_enabled"): "yes"}
+    monkeypatch.setattr(features, "config_has_option", lambda s, o: (s, o) in on or has(s, o))
+    monkeypatch.setattr(features, "config_get", lambda s, o: on.get((s, o)) or get(s, o))
+    assert ok(alice.get("/kb/api/v1/system/info"))["kb_defaults"] == {"wiki_enabled": True, "memory_enabled": True}
+    kb = ok(alice.post("/kb/api/v1/knowledge-bases", json={"name": "Defaults"}), 201)
+    assert kb["indexing_strategy"]["wiki_enabled"] is True and kb["memory_config"]["enabled"] is True
+    off = ok(alice.post("/kb/api/v1/knowledge-bases", json={
+        "name": "Off", "indexing_strategy": {"wiki_enabled": False}, "memory_config": {"enabled": False}}), 201)
+    assert off["indexing_strategy"]["wiki_enabled"] is False and off["memory_config"]["enabled"] is False
+    faq = ok(alice.post("/kb/api/v1/knowledge-bases", json={"name": "Answers", "type": "faq"}), 201)
+    assert faq["indexing_strategy"]["wiki_enabled"] is False and not faq["memory_config"].get("enabled")

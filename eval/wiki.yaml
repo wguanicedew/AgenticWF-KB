@@ -2,7 +2,7 @@
 # A small linked corpus about a fictional distributed-computing operation: the same systems
 # appear in several documents, so the wiki has pages to merge and link.
 #
-#   python -m kb_api.evaluate eval/wiki.yaml --url http://localhost:8766 \
+#   python -m agenticwf.kb.api.evaluate eval/wiki.yaml --url http://localhost:8766 \
 #     --token-file ~/.agenticwf-kb/token --load --wiki --model-id <tool-capable chat model> --json out.json
 #
 # kind: single | multi (the answer needs several documents) | global (about the whole corpus).

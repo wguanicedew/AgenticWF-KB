@@ -1,10 +1,10 @@
 # authsvc route policy for the KB (authsvc mode only): these rules belong in AgenticWF-auth's
 # policy.yaml (/etc/agenticwf/policy.yaml when mounted from the host; docs/deployment.md).
 # authsvc denies every route without a matching rule, so each KB endpoint needs one. First
-# matching rule wins; /kb/** does not overlap with the agent's paths. OpenKB-style read-only
+# matching rule wins; /kb/** does not overlap with the agent's paths. Read-only
 # POSTs come before the generic write rule.
 #
-# The KB checks the same scopes again in-process (kb_api.deps.require), so the two must agree.
+# The KB checks the same scopes again in-process (agenticwf.kb.api.deps.require), so the two must agree.
 # Standalone and service modes do not use this file.
 
 required_scopes: [app:access]   # account approval; matches KB_REQUIRED_SCOPES
@@ -57,6 +57,8 @@ rules:
   - {path: /kb/api/v1/knowledge-bases, methods: [POST], scopes: [knowledge:write], allow_machine: false}
   - {path: /kb/api/v1/knowledge-bases/*, methods: [PUT, DELETE], scopes: [knowledge:write], allow_machine: false}
   - {path: /kb/api/v1/models/**, methods: [POST, PUT, DELETE], scopes: [knowledge:write], allow_machine: false}
+  - {path: /kb/api/v1/remotes, methods: [POST], scopes: [knowledge:write], allow_machine: false}
+  - {path: /kb/api/v1/remotes/**, methods: [POST, PUT, DELETE], scopes: [knowledge:write], allow_machine: false}
 
   # other writes: M2M allowed (pipelines that push knowledge)
   - {path: /kb/api/v1/**, methods: [POST, PUT, PATCH, DELETE], scopes: [knowledge:write]}

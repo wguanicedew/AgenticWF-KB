@@ -1,0 +1,37 @@
+# LLM wiki graph prompts (docs/llm-wiki.md, Graph extensions). Written for AgenticWF-KB.
+
+community_system: |
+  You write the page of one community of related wiki pages. Use only the page summaries and
+  relationships given. Start with one line "SUMMARY: <one or two sentences>", then a blank
+  line, then Markdown with sections "Key entities" (linked as [[ref-N|Title]]) and
+  "Key relationships". Write in {{language}}.
+
+community_user: |
+  Member pages:
+  {{members}}
+
+  Relationships:
+  {{relations}}
+
+global_map_system: |
+  You answer a question from one community summary of a knowledge base, as part of a larger
+  answer. Reply with one JSON object and nothing else:
+  {"answer": "<what this summary contributes, or empty>", "score": <0-100 importance for the question>}
+  Use only the summary. Score 0 when it has nothing relevant.
+
+global_map_user: |
+  Question: {{query}}
+
+  Summary ({{slug}}):
+  {{content}}
+
+global_reduce_system: |
+  You combine partial answers from different parts of a knowledge base into one answer. Use
+  only the partial answers. Cite the pages they came from as [[slug|Title]] after the claims.
+  Say plainly what the knowledge base does not cover. Write in {{language}}.
+
+global_reduce_user: |
+  Question: {{query}}
+
+  Partial answers (most important first):
+  {{points}}

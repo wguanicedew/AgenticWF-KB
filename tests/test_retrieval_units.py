@@ -4,9 +4,9 @@ import asyncio
 
 import pytest
 
-from kb_runtime.retrieval.fusion import rrf
-from kb_runtime.retrieval.merge import merge
-from kb_runtime.retrieval.rerank import degrade, mmr, rerank
+from agenticwf.kb.runtime.retrieval.fusion import rrf
+from agenticwf.kb.runtime.retrieval.merge import merge
+from agenticwf.kb.runtime.retrieval.rerank import degrade, mmr, rerank
 
 
 def test_rrf_weights_and_normalisation():

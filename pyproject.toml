@@ -3,13 +3,15 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agenticwf-kb"
+name = "agenticwf-kb-server"
 version = "0.1.0"
-description = "AgenticWF knowledge service: knowledge bases, hybrid search and agentic search"
+description = "AgenticWF knowledge service (server): knowledge bases, hybrid search and agentic search"
 license = "Apache-2.0"
 authors = [{name = "Wen Guan", email = "wen.guan@cern.ch"}]
 requires-python = ">=3.11"
-# Also needs `agenticwf-authsvc` (AuthContext signing and verification), which is not on PyPI.
+# The client (KBClient, `agenticwf kb`) is its own package, agenticwf-kb-client, in client/;
+# scripts/build-packages.sh builds both wheels.
+# Also needs `agenticwf-auth-server` (AuthContext signing and verification), which is not on PyPI.
 # Install it from the AgenticWF-auth repository first:
 #   pip install ../AgenticWF-auth/authsvc
 #   pip install "git+https://github.com/InnovateAILab/AgenticWF-auth.git@<tag>#subdirectory=authsvc"
@@ -20,7 +22,7 @@ dependencies = [
     "SQLAlchemy[asyncio]>=2.0.30",
     "alembic",
     "retrying",
-    "psycopg[binary]>=3.2",   # PostgreSQL driver, sync and async (kb_core.orm)
+    "psycopg[binary]>=3.2",   # PostgreSQL driver, sync and async (agenticwf.kb.core.orm)
     "PyYAML>=6.0",
     "cryptography>=42",       # SecretBox: secrets stored encrypted in the database
     "pgvector>=0.3",          # halfvec column type (kb_embeddings)
@@ -31,9 +33,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8", "httpx>=0.27"]
-# The Python client's Optuna warm-start helper (kb_client.hpo, docs/hpo-warm-start.md).
-hpo = ["optuna>=3.6"]
+# tests/test_hpo.py also uses the client: pip install -e client
+test = ["pytest>=8", "httpx>=0.27", "opentelemetry-sdk>=1.30"]
+# OpenTelemetry traces and metrics over OTLP/HTTP (docs/deployment.md, Tracing and metrics).
+otel = ["opentelemetry-sdk>=1.30", "opentelemetry-exporter-otlp-proto-http>=1.30",
+        "opentelemetry-instrumentation-fastapi>=0.51b0", "opentelemetry-instrumentation-httpx>=0.51b0"]
 # Document parsers (phase 1, docs/ingestion.md).
 parsers = [
     "pypdfium2>=4",
@@ -48,16 +52,16 @@ parsers = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["kb_api*", "kb_core*", "kb_runtime*", "kb_client*"]
+include = ["agenticwf.kb*"]
 
 [project.scripts]
-agenticwf-kb = "kb_api.cli:main"                 # API keys and the admin key (docs/run-modes.md)
-agenticwf-kb-worker = "kb_api.worker:main"       # a worker process beside the API (docs/ingestion.md)
+agenticwf-kb = "agenticwf.kb.api.cli:main"                 # API keys and the admin key (docs/run-modes.md)
+agenticwf-kb-worker = "agenticwf.kb.api.worker:main"       # a worker process beside the API (docs/ingestion.md)
 
 [tool.setuptools.package-data]
-"kb_core.orm.base.alembic" = ["script.py.mako", "README"]
-kb_runtime = ["defaults/prompts/*.yaml"]
-kb_api = ["web/*.html"]
+"agenticwf.kb.core.orm.base.alembic" = ["script.py.mako", "README"]
+"agenticwf.kb.runtime" = ["defaults/prompts/*.yaml"]
+"agenticwf.kb.api" = ["web/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

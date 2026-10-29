@@ -9,8 +9,8 @@ ORIGIN = {"Origin": "http://kb.test"}
 
 @pytest.fixture
 def token(standalone_client):
-    from kb_api.settings import token_path
-    from kb_api.standalone import ensure_token
+    from agenticwf.kb.api.settings import token_path
+    from agenticwf.kb.api.standalone import ensure_token
 
     return ensure_token(token_path())[0]
 
@@ -24,7 +24,7 @@ def test_health_needs_no_token(standalone_client):
 
 
 def test_token_file_is_created_once_and_rotates(tmp_path):
-    from kb_api.standalone import ensure_token
+    from agenticwf.kb.api.standalone import ensure_token
 
     path = tmp_path / "secrets" / "token"
     first, created = ensure_token(path)
@@ -41,7 +41,7 @@ def test_the_one_local_user(standalone_client, token):
     me = standalone_client.get("/kb/api/v1/me", headers=bearer(token)).json()["data"]
     assert me["subject"] == "local:user" and me["mode"] == "standalone" and me["auth_method"] == "bearer"
     assert set(me["scopes"]) == {"app:access", "knowledge:read", "knowledge:write", "admin"}
-    same = standalone_client.get("/kb/api/v1/me", headers={"X-API-Key": token}).json()["data"]   # OpenKB clients
+    same = standalone_client.get("/kb/api/v1/me", headers={"X-API-Key": token}).json()["data"]
     assert same["subject"] == "local:user"
 
 
@@ -70,8 +70,8 @@ def test_sign_in_link_sets_a_cookie(standalone_client, token):
 
 
 def test_rotation_applies_without_restart_and_signs_browsers_out(standalone_client, token):
-    from kb_api.settings import token_path
-    from kb_api.standalone import ensure_token
+    from agenticwf.kb.api.settings import token_path
+    from agenticwf.kb.api.standalone import ensure_token
 
     standalone_client.get(f"/kb/?token={token}", follow_redirects=False)
     assert standalone_client.get("/kb/api/v1/me").status_code == 200
@@ -114,7 +114,7 @@ def test_no_api_key_routes(standalone_client, token):
 
 
 def test_cli_token(capsys, monkeypatch, tmp_path):
-    from kb_api import cli
+    from agenticwf.kb.api import cli
 
     monkeypatch.setenv("KB_TOKEN_FILE", str(tmp_path / "token"))
     monkeypatch.delenv("KB_TOKEN", raising=False)
@@ -127,3 +127,41 @@ def test_cli_token(capsys, monkeypatch, tmp_path):
     with pytest.raises(SystemExit):
         cli.main(["token"])
     assert capsys.readouterr().out.strip() == (tmp_path / "token").read_text().strip()
+
+
+def test_login_page_shows_how_to_get_the_token(monkeypatch):
+    from agenticwf.kb.api.standalone import login_page
+
+    assert "agenticwf-kb token" in login_page("/kb", "/kb/")               # run on the host
+    monkeypatch.setenv("KB_TOKEN_HELP", "# By the container's id:\ndocker exec abc agenticwf-links kb")
+    page = login_page("/kb", "/kb/")
+    assert '<p class="h">By the container&#x27;s id:</p>' in page
+    assert "<pre>docker exec abc agenticwf-links kb</pre>" in page and "agenticwf-kb token" not in page
+
+
+def test_hint_shows_the_token(standalone_client, token, monkeypatch):
+    assert 'action="/kb/auth/hint"' not in standalone_client.get("/kb/auth/login").text   # no hint: no form
+    monkeypatch.setenv("KB_LOCAL_HINT", "short")                                          # too short: off
+    assert 'action="/kb/auth/hint"' not in standalone_client.get("/kb/auth/login").text
+    monkeypatch.setenv("KB_LOCAL_HINT", "blue whale 42")
+    assert "<details>" in standalone_client.get("/kb/auth/login").text                    # the commands, folded
+    assert standalone_client.post("/kb/auth/hint", data={"hint": "blue whale 42"},
+                                  headers={"Origin": "https://evil.example"}).status_code == 403
+    wrong = standalone_client.post("/kb/auth/hint", data={"hint": "red whale"}, headers=ORIGIN)
+    assert wrong.status_code == 401 and "<details open>" in wrong.text and token not in wrong.text
+    right = standalone_client.post("/kb/auth/hint", data={"hint": "blue whale 42", "return_to": "/kb/x"},
+                                   headers=ORIGIN)
+    assert right.status_code == 200 and f"<pre>{token}</pre>" in right.text and 'href="/kb/x"' in right.text
+    assert "set-cookie" in right.headers
+
+
+def test_wrong_hints_are_throttled(standalone_client, token, monkeypatch):
+    import agenticwf.kb.api.standalone as module
+
+    monkeypatch.setenv("KB_LOCAL_HINT", "blue whale 42")
+    for _ in range(module.HINT_TRIES):
+        assert standalone_client.post("/kb/auth/hint", data={"hint": "guess"}, headers=ORIGIN).status_code == 401
+    held = standalone_client.post("/kb/auth/hint", data={"hint": "blue whale 42"}, headers=ORIGIN)
+    assert held.status_code == 429 and token not in held.text
+    monkeypatch.setattr(module, "HINT_WAIT", 0)
+    assert standalone_client.post("/kb/auth/hint", data={"hint": "blue whale 42"}, headers=ORIGIN).status_code == 200

@@ -298,7 +298,7 @@ def test_chunk_edit_reindexes(client, alice):
 
 # --- the other modes -----------------------------------------------------------------------------
 def test_service_mode_scopes_knowledge_to_the_named_user(database):
-    from kb_api.service import encode_principal
+    from agenticwf.kb.api.service import encode_principal
 
     with make_client("service", required_scopes=frozenset()) as client:
         def as_(name, org=None):
@@ -321,8 +321,8 @@ def test_service_mode_scopes_knowledge_to_the_named_user(database):
 
 
 def test_standalone_local_user_owns_what_it_adds(database):
-    from kb_api.settings import token_path
-    from kb_api.standalone import ensure_token
+    from agenticwf.kb.api.settings import token_path
+    from agenticwf.kb.api.standalone import ensure_token
 
     token = ensure_token(token_path())[0]
     with make_client("standalone", local_user="wguan") as client:
@@ -333,7 +333,7 @@ def test_standalone_local_user_owns_what_it_adds(database):
 
 
 def test_reassign_owner(client, alice):
-    from kb_api.db import reassign_owner
+    from agenticwf.kb.api.db import reassign_owner
 
     kb = alice.post("/kb/api/v1/knowledge-bases", json={"name": "Docs"}).json()["data"]["id"]
     upload(alice, kb)

@@ -6,10 +6,10 @@ import datetime
 
 import sqlalchemy as sa
 
-from kb_core.orm.base.session import async_session_scope, dispose_async_engine
-from kb_core.orm.models.kb import Task, utcnow
-from kb_runtime.tasks import queue as q
-from kb_runtime.tasks.runner import HandlerSpec, Permanent, RunnerSettings, TaskRunner
+from agenticwf.kb.core.orm.base.session import async_session_scope, dispose_async_engine
+from agenticwf.kb.core.orm.models.kb import Task, utcnow
+from agenticwf.kb.runtime.tasks import queue as q
+from agenticwf.kb.runtime.tasks.runner import HandlerSpec, Permanent, RunnerSettings, TaskRunner
 
 
 def run(coro):

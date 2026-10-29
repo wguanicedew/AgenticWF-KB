@@ -9,33 +9,33 @@ import pytest
 from conftest import user
 
 SRC = Path(__file__).resolve().parents[1] / "src"
-# What hosts (kb_api) may import from the runtime: the bootstrap, the threads, the errors.
-ALLOWED_RUNTIME_IMPORTS = {"kb_runtime.bootstrap", "kb_runtime.thread.manager", "kb_runtime.thread.thread",
-                           "kb_runtime.errors"}
+# What hosts (agenticwf.kb.api) may import from the runtime: the bootstrap, the threads, the errors.
+ALLOWED_RUNTIME_IMPORTS = {"agenticwf.kb.runtime.bootstrap", "agenticwf.kb.runtime.thread.manager", "agenticwf.kb.runtime.thread.thread",
+                           "agenticwf.kb.runtime.errors"}
 
 
 def runtime_imports(path: Path) -> set[str]:
     found = set()
     for node in ast.walk(ast.parse(path.read_text())):
-        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("kb_runtime"):
-            names = {f"{node.module}.{a.name}" for a in node.names} if node.module == "kb_runtime" else {node.module}
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("agenticwf.kb.runtime"):
+            names = {f"{node.module}.{a.name}" for a in node.names} if node.module == "agenticwf.kb.runtime" else {node.module}
             found |= names
         elif isinstance(node, ast.Import):
-            found |= {a.name for a in node.names if a.name.startswith("kb_runtime")}
+            found |= {a.name for a in node.names if a.name.startswith("agenticwf.kb.runtime")}
     return found
 
 
 def test_hosts_reach_the_runtime_only_through_threads():
     offenders = {}
-    for path in (SRC / "kb_api").rglob("*.py"):
+    for path in (SRC / "agenticwf" / "kb" / "api").rglob("*.py"):
         bad = runtime_imports(path) - ALLOWED_RUNTIME_IMPORTS
         if bad:
             offenders[str(path.relative_to(SRC))] = sorted(bad)
-    assert not offenders, f"kb_api must use KBThread / SystemThread, not runtime services: {offenders}"
+    assert not offenders, f"agenticwf.kb.api must use KBThread / SystemThread, not runtime services: {offenders}"
 
 
 def manager(**kwargs):
-    from kb_runtime.bootstrap import RuntimeConfig, build_thread_manager
+    from agenticwf.kb.runtime.bootstrap import RuntimeConfig, build_thread_manager
 
     return build_thread_manager(RuntimeConfig(**kwargs))
 
@@ -66,7 +66,7 @@ def test_owner_is_the_user_not_the_token():
 
 
 def test_per_owner_limit():
-    from kb_runtime.errors import Busy
+    from agenticwf.kb.runtime.errors import Busy
 
     async def scenario():
         m = manager(max_threads_per_owner=1)
@@ -95,9 +95,9 @@ def test_shutdown_closes_open_threads():
 def test_busy_is_429_in_the_envelope(database):
     from fastapi.testclient import TestClient
 
-    from kb_api.app import create_app
-    from kb_api.settings import Settings
-    from kb_runtime.bootstrap import RuntimeConfig, build_thread_manager
+    from agenticwf.kb.api.app import create_app
+    from agenticwf.kb.api.settings import Settings
+    from agenticwf.kb.runtime.bootstrap import RuntimeConfig, build_thread_manager
     from conftest import SECRET, signed
 
     m = build_thread_manager(RuntimeConfig(max_threads_per_owner=0))

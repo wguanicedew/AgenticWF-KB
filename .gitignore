@@ -1,7 +1,10 @@
 __pycache__/
 *.pyc
-*.env
-!*.env.example
-.src/
-caddy-*/
-!sources.env
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+.agenticwf/
+kb-dev.cfg
+build/
+dist/

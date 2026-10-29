@@ -12,7 +12,7 @@ done
 # minutes): an external database briefly down at boot must not exhaust supervisord's retries.
 delay=2
 for attempt in $(seq 1 12); do
-    /opt/kb/venv/bin/python -m kb_api.db init && break
+    /opt/kb/venv/bin/python -m agenticwf.kb.api.db init && break
     if [[ $attempt -eq 12 ]]; then
         echo "[start-kb] the database is still unavailable; giving up" >&2
         exit 1
@@ -35,7 +35,7 @@ if [[ "$LISTEN_HOST" == unix:* ]]; then
 else
     bind=(--host "$LISTEN_HOST" --port "$PORT")
 fi
-exec /opt/kb/venv/bin/uvicorn --factory kb_api.app:create_app "${bind[@]}" \
+exec /opt/kb/venv/bin/uvicorn --factory agenticwf.kb.api.app:create_app "${bind[@]}" \
     --workers 1 \
     --log-level "$LOG_LEVEL" \
     --no-server-header \

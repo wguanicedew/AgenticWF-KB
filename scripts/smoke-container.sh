@@ -5,7 +5,7 @@
 #
 #   scripts/smoke-container.sh [image]          default image: agenticwf-kb:latest
 #
-# Needs docker (or DOCKER=podman), curl and python3 with the authsvc package (to sign the authsvc
+# Needs docker (or DOCKER=podman), curl and python3 with the agenticwf-auth package (to sign the authsvc
 # context; pip install ../AgenticWF-auth/authsvc).
 set -euo pipefail
 
@@ -53,7 +53,7 @@ $DOCKER run -d --name "$PREFIX-authsvc" -p 127.0.0.1:18767:8020 -e KB_AUTH_MODE=
 wait_healthy "$PREFIX-authsvc" http://127.0.0.1:18767/kb/health
 HEADERS=$(SECRET="$SECRET" python3 - <<'EOF'
 import os, time
-from authsvc.context import AuthContext, encode_context
+from agenticwf.auth.context import AuthContext, encode_context
 ctx = AuthContext(subject="bob", user_id="bob", scopes=frozenset({"app:access", "knowledge:read"}),
                   expires_at=int(time.time()) + 600)
 payload, sig = encode_context(ctx, os.environ["SECRET"].encode(), 60, "GET", "/kb/api/v1/me")
@@ -72,7 +72,7 @@ curl -fsS -H "X-KB-Principal: $PRINCIPAL" http://127.0.0.1:18768/kb/api/v1/me | 
     || fail "service /me with X-KB-Principal"
 code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18768/kb/api/v1/me)
 [[ $code == 400 ]] || fail "service /me without a principal gave $code"
-$DOCKER exec -u kb "$PREFIX-service" python -m kb_api.db check | grep -q pg_search || fail "pg_search missing"
+$DOCKER exec -u kb "$PREFIX-service" python -m agenticwf.kb.api.db check | grep -q pg_search || fail "pg_search missing"
 echo "   ok"
 
 echo "phase-0 container smoke test passed"

@@ -5,13 +5,13 @@
 #   supervisord
 #   ├── postgres     PostgreSQL 16 (PGDG) + pgvector + pg_search (ParadeDB) + pg_trgm,
 #   │                Unix socket /run/postgresql only, database `kb`
-#   ├── kb           uvicorn kb_api.app:create_app on ${LISTEN_HOST}:8020, in KB_AUTH_MODE:
+#   ├── kb           uvicorn agenticwf.kb.api.app:create_app on ${LISTEN_HOST}:8020, in KB_AUTH_MODE:
 #   │                standalone (default; a personal KB, one access token), authsvc (behind Caddy +
 #   │                authsvc), service (the agent's backend, X-KB-Principal)
 #   ├── kb-service   optional second listener in service mode (KB_SERVICE_LISTEN), for the agent
 #   └── kb-worker×N  worker processes (KB_WORKER_PROCESSES; default 0 = in the API process)
 #
-# The `authsvc` package (AuthContext signing and verification) comes from the AgenticWF-auth
+# The `agenticwf-auth-server` package (AuthContext signing and verification) comes from the AgenticWF-auth
 # repository through a named build context. Build from the repository root:
 #
 #   docker build --network=host -f container/Dockerfile \
@@ -61,7 +61,7 @@ COPY src /opt/kb/src/kb/src
 RUN "${PYTHON}" -m venv /opt/kb/venv \
  && /opt/kb/venv/bin/pip install --no-cache-dir --upgrade pip \
  && /opt/kb/venv/bin/pip install --no-cache-dir /opt/kb/src/authsvc \
- && /opt/kb/venv/bin/pip install --no-cache-dir "/opt/kb/src/kb[parsers]"
+ && /opt/kb/venv/bin/pip install --no-cache-dir "/opt/kb/src/kb[parsers,otel]"
 
 COPY container/supervisord.conf /etc/supervisord.conf
 COPY container/supervisord.d/ /etc/supervisord.d/

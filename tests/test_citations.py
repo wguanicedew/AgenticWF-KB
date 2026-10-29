@@ -8,8 +8,8 @@ import json
 import pytest
 
 from conftest import Caller, drain, make_client, user
-from kb_runtime import citation
-from kb_runtime.ingestion.parsers import parse
+from agenticwf.kb.runtime import citation
+from agenticwf.kb.runtime.ingestion.parsers import parse
 from test_agentic import ScriptedChat, call, chat_model
 
 RW = ("app:access", "knowledge:read", "knowledge:write")

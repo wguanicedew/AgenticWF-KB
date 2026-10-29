@@ -294,3 +294,37 @@ def test_switches_citations_and_fixed_fallback(client, alice):
         assert data["stopped"] == "no_results" and data["answer"].startswith("Sorry")
     finally:
         settings.citations, settings.fallback_strategy, settings.quick_rewrite = old
+
+
+def test_default_preset_tools_and_where_each_source_came_from(client, alice):
+    presets = {p["name"]: p for p in alice.get("/kb/api/v1/agentic-search/presets").json()["data"]}
+    assert presets["smart"]["default"] and not presets["deep"]["default"]
+    tools = {t["name"]: t for t in alice.get("/kb/api/v1/agentic-search/tools").json()["data"]["tools"]}
+    assert "smart" in tools["web_search"]["presets"] and tools["recall"]["available"]
+
+    model = chat_model(alice)
+    kb_id, _ = setup_docs(client, alice)
+    services = client.app.state.manager.services
+
+    async def recall(auth, body):
+        return [{"id": "f1", "fact": "Alice runs the pilot shifts.", "source": "Alice", "relation": "RUNS",
+                 "target": "pilot shifts", "valid_at": "2026-01-01T00:00:00", "invalid_at": None}]
+
+    async def web(auth, query, provider=None, n=5, top=3, cache=None):
+        return {"query": query, "providers": ["duckduckgo"], "errors": [], "results": [{
+            "title": "Pilot FAQ", "url": "https://example.org/pilot", "snippet": "", "published": "",
+            "content": "Pilots retry stage-out five times.", "provider": "duckduckgo"}]}
+
+    services.memory.search, services.web.search = recall, web
+    script(client, [
+        {"tool_calls": [call("search_knowledge", queries=["stage-out retries"]), call("recall", query="pilot"),
+                        call("web_search", query="pilot stage-out retries")]},
+        {"content": 'Five retries <ref id="c1"/>; Alice runs the shifts <ref id="m1"/>; see <ref id="w1"/>.'}])
+    data = agentic(alice, query="Who runs the pilot and how often does it retry?", knowledge_base_ids=[kb_id],
+                   model_id=model)
+    assert data["preset"] == "smart"
+    assert [(s["origin"], s.get("provider")) for s in data["sources"]] == [
+        ("documents", None), ("memory", None), ("web", "duckduckgo")]
+    assert '<memory fact_id="f1"' in data["answer"]
+    assert "(memory) Your memory: Alice runs the pilot shifts." in data["answer"]
+    assert "(web via duckduckgo) Pilot FAQ. https://example.org/pilot" in data["answer"]

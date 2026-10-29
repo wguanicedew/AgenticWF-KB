@@ -3,7 +3,7 @@ import tempfile
 import time
 from pathlib import Path
 
-# kb_core.common.config is read at import time (kb_core.orm, logging), so write the test
+# agenticwf.kb.core.common.config is read at import time (agenticwf.kb.core.orm, logging), so write the test
 # configuration before importing anything from src/. The tests need PostgreSQL with the KB's
 # extensions (the CI service is the ParadeDB image):
 #   KB_TEST_DB_URL=postgresql+psycopg://postgres:test@127.0.0.1:5432/postgres pytest -q
@@ -25,7 +25,7 @@ os.environ["KB_TOKEN_FILE"] = str(_TMP / "data" / "secrets" / "token")
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from authsvc.context import AuthContext, encode_context  # noqa: E402
+from agenticwf.auth.context import AuthContext, encode_context  # noqa: E402
 
 SECRET = b"s" * 48
 
@@ -48,7 +48,7 @@ def signed(ctx, method, path, secret=SECRET, ttl=60):
 def database():
     if not _DB_URL:
         pytest.skip("KB_TEST_DB_URL is not set (PostgreSQL with vector, pg_trgm, pg_search)")
-    from kb_api.db import init_db
+    from agenticwf.kb.api.db import init_db
 
     init_db()
 
@@ -58,7 +58,8 @@ TABLES = ("kb_embeddings", "kb_chunks", "kb_knowledge_tag_relations", "kb_knowle
           "kb_events", "kb_record_types", "kb_records", "kb_record_items", "kb_record_versions",
           "kb_record_field_stats", "kb_wiki_pages", "kb_wiki_page_revisions", "kb_wiki_folders", "kb_wiki_page_issues",
           "kb_wiki_pending_ops", "kb_wiki_relations", "kb_wiki_communities", "kb_memory_episodes",
-          "kb_memory_entities", "kb_memory_facts", "kb_web_search_providers")
+          "kb_memory_entities", "kb_memory_facts", "kb_web_search_providers", "kb_remotes", "kb_sites",
+          "kb_user_settings", "kb_prompt_overrides")
 
 
 @pytest.fixture(autouse=True)
@@ -68,7 +69,7 @@ def clean_tables(request):
         return
     request.getfixturevalue("database")
     import sqlalchemy as sa
-    from kb_core.orm.base.session import get_engine
+    from agenticwf.kb.core.orm.base.session import get_engine
 
     with get_engine().begin() as conn:
         conn.execute(sa.text("TRUNCATE " + ", ".join(TABLES) + " CASCADE"))
@@ -76,9 +77,9 @@ def clean_tables(request):
 
 
 def make_client(mode, **settings_kwargs):
-    from kb_api.app import create_app
-    from kb_api.settings import Settings
-    from kb_runtime.bootstrap import RuntimeConfig, build_thread_manager
+    from agenticwf.kb.api.app import create_app
+    from agenticwf.kb.api.settings import Settings
+    from agenticwf.kb.runtime.bootstrap import RuntimeConfig, build_thread_manager
 
     settings = Settings(mode=mode, context_secret=SECRET, **settings_kwargs)
     manager = build_thread_manager(RuntimeConfig(run_workers=False))   # tests drain the queue themselves
@@ -89,7 +90,7 @@ def drain(client) -> int:
     """Run every due task to completion (the in-process workers are off in tests)."""
     import asyncio
 
-    from kb_core.orm.base.session import dispose_async_engine
+    from agenticwf.kb.core.orm.base.session import dispose_async_engine
 
     async def run():
         try:
@@ -137,7 +138,7 @@ def standalone_client(database):
 
 @pytest.fixture
 def service_client(database):
-    from kb_api.settings import DEFAULT_SERVICE_SCOPES_CAP
+    from agenticwf.kb.api.settings import DEFAULT_SERVICE_SCOPES_CAP
 
     with make_client("service", required_scopes=frozenset(), service_scopes_cap=DEFAULT_SERVICE_SCOPES_CAP) as client:
         yield client
@@ -147,7 +148,7 @@ def sql_rows(statement, **params):
     """Rows of one SQL statement, outside any request (assertions on stored state)."""
     import sqlalchemy as sa
 
-    from kb_core.orm.base.session import get_engine
+    from agenticwf.kb.core.orm.base.session import get_engine
 
     with get_engine().begin() as conn:
         return conn.execute(sa.text(statement), params).all()

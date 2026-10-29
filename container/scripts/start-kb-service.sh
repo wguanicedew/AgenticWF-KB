@@ -5,10 +5,11 @@
 # address is a Unix socket or loopback (or KB_SERVICE_ALLOW_REMOTE=true).
 set -euo pipefail
 
-# Wait until `kb` has migrated the schema.
+# Wait until `kb` has migrated the schema to this code's Alembic head (on an existing database the
+# tables are there before new columns are).
 for _ in $(seq 1 120); do
-    /opt/kb/venv/bin/python -c "import sqlalchemy as sa; from kb_core.orm.base.session import get_engine; \
-sa.inspect(get_engine()).has_table('alembic_version') or exit(1)" 2>/dev/null && break
+    /opt/kb/venv/bin/python -c "from agenticwf.kb.core.orm.base.migrate import at_head; \
+at_head() or exit(1)" 2>/dev/null && break
     sleep 2
 done
 
@@ -22,7 +23,7 @@ else
     bind=(--host "${listen%:*}" --port "${listen##*:}")
 fi
 export KB_AUTH_MODE=service KB_RUN_WORKERS=false
-exec /opt/kb/venv/bin/uvicorn --factory kb_api.app:create_app "${bind[@]}" \
+exec /opt/kb/venv/bin/uvicorn --factory agenticwf.kb.api.app:create_app "${bind[@]}" \
     --workers 1 \
     --log-level "${LOG_LEVEL:-info}" \
     --no-server-header \

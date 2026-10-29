@@ -10,7 +10,7 @@ import re
 import pytest
 
 from conftest import Caller, drain, make_client, sql_rows, user
-from kb_runtime.wiki import text as wt
+from agenticwf.kb.runtime.wiki import text as wt
 
 RW = ("app:access", "knowledge:read", "knowledge:write")
 
@@ -225,7 +225,7 @@ def test_pending_op_claims_are_disjoint(client, alice):
         sql_rows("INSERT INTO kb_wiki_pending_ops (knowledge_base_id, knowledge_id, op, payload, fail_count, created_at) "
                  "VALUES (:k, :i, 'ingest', '{}', 0, now()) RETURNING id", k=kb_id, i=f"doc-{i}")
     pipeline = client.app.state.manager.services.wiki_pipeline
-    from kb_core.orm.base.session import dispose_async_engine
+    from agenticwf.kb.core.orm.base.session import dispose_async_engine
 
     async def both():
         try:

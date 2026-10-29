@@ -1,6 +1,6 @@
 """The chunker's own golden cases (docs/ingestion.md, Chunker)."""
 
-from kb_runtime.ingestion.chunker import chunk, heuristic_titles, markdown_headings, resolve_strategy
+from agenticwf.kb.runtime.ingestion.chunker import chunk, heuristic_titles, markdown_headings, resolve_strategy
 
 
 def check_offsets(text, pieces):

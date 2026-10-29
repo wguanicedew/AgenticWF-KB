@@ -8,8 +8,8 @@ import statistics
 import pytest
 
 from conftest import Caller, drain, make_client, user
-from kb_runtime.records.plugins.hpo import HPOPlugin
-from kb_runtime.records.plugins.hpo import algorithm as alg
+from agenticwf.kb.runtime.records.plugins.hpo import HPOPlugin
+from agenticwf.kb.runtime.records.plugins.hpo import algorithm as alg
 
 RW = ("app:access", "knowledge:read", "knowledge:write")
 SPACE = {"learning_rate": {"type": "float", "low": 1e-5, "high": 1e-1, "log": True},
@@ -91,7 +91,7 @@ def client(database):
 
 
 async def _sync(records):
-    from kb_core.orm.base.session import dispose_async_engine
+    from agenticwf.kb.core.orm.base.session import dispose_async_engine
 
     try:
         await records.sync_plugin_types()
@@ -236,8 +236,8 @@ def test_python_client_warm_start_round_trip(client):
     optuna = pytest.importorskip("optuna")
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     from conftest import signed
-    from kb_client import KBClient
-    from kb_client.hpo import upload_study, warm_start
+    from agenticwf.kb.client import KBClient
+    from agenticwf.kb.client.hpo import upload_study, warm_start
 
     ctx = user("alice", RW, org="eic")
     kb = KBClient("http://testserver/kb", http=client,

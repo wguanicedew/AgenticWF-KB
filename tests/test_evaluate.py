@@ -1,4 +1,4 @@
-"""The search eval harness (kb_api.evaluate) in-process: plain search, quick and deep on the
+"""The search eval harness (agenticwf.kb.api.evaluate) in-process: plain search, quick and deep on the
 phase-2 eval set, with the hash embedder and a scripted model that asks for evidence of every
 passage it saw. It checks the harness and the three paths end to end, not answer quality."""
 
@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from conftest import Caller, make_client, signed, user
-from kb_api.evaluate import EvalSet, Evaluator, summarise, table
+from agenticwf.kb.api.evaluate import EvalSet, Evaluator, summarise, table
 
 EVAL = Path(__file__).resolve().parent.parent / "eval" / "phase2.yaml"
 

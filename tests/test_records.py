@@ -8,10 +8,11 @@ import random
 import pytest
 
 from conftest import Caller, drain, make_client, sql_rows, user
-from kb_runtime.errors import Invalid
-from kb_runtime.records import query as rq
-from kb_runtime.records import similarity as sim
-from kb_runtime.records.schema import TypeDef, classify_change, infer
+from agenticwf.kb.runtime.errors import Invalid
+from agenticwf.kb.runtime.records import query as rq
+from agenticwf.kb.runtime.records import similarity as sim
+from agenticwf.kb.runtime.records.service import prerank_sql, text_words, type_text
+from agenticwf.kb.runtime.records.schema import TypeDef, classify_change, infer
 
 RW = ("app:access", "knowledge:read", "knowledge:write")
 
@@ -113,6 +114,31 @@ def test_similarity_components():
     assert sim.features_similarity({"x": 1, "y": 2}, {"x": 1}, {"x": (0, 2)}, set()) == 1.0     # missing ≠ penalty
     assert sim.combine({"text": None, "facets": 1.0, "features": 0.5}) == pytest.approx((0.3 + 0.2) / 0.7)
 
+
+
+def test_similar_prerank_and_type_text():
+    expr, params = prerank_sql({"model": "resnet50", "flag": True}, {"params.lr": 0.001, "params.optimizer": "adamw",
+                                                                     "tags": ["a"]},
+                               {"params.lr": (0.0001, 0.1)}, {"params.lr"})
+    assert expr.count("CASE WHEN r.facets") == 2 and "ln(" in expr and "r.features ->> " in expr
+    values = set(map(str, params.values()))
+    assert {"model", "resnet50", "true", "params.optimizer", "adamw"} <= values and "tags" not in values
+    assert prerank_sql({}, {}, {}, set()) == ("0", {})
+    a = {"record_type": "t", "score": 0.9, "facets": {"m": "x"}, "features": {"lr": 0.001}}
+    twin = {**a, "score": 0.85}
+    other = {"record_type": "t", "score": 0.6, "facets": {"m": "y"}, "features": {"lr": 0.1}}
+    ranges = {"lr": (0.001, 0.1)}
+    assert sim.record_similarity(a, twin, ranges, set()) == 1.0
+    assert sim.record_similarity(a, {**twin, "record_type": "u"}, ranges, set()) == 0.0
+    alike = lambda x, y: sim.record_similarity(x, y, ranges, set())     # noqa: E731
+    assert sim.mmr([a, twin, other], 2, alike, 1.0) == [a, twin]            # λ = 1: plain ranking
+    assert sim.mmr([a, twin, other], 2, alike, 0.3) == [a, other]           # the twin is redundant
+    assert sim.cosine([1, 0], [1, 0]) == 1.0 and sim.cosine([1, 0], [0, 1]) == 0.0 and sim.cosine([0], [0]) == 0.0
+
+    class Row:
+        name, title, description = "experiment_run", "ML experiment run", "One training run"
+    words = text_words(type_text(Row, typedef()))
+    assert {"experiment", "run", "training", "lr", "optimizer", "accuracy"} <= words
 
 def test_inference_rules():
     samples = [{"run_id": f"r{i}", "model": ["resnet", "vit"][i % 2], "accuracy": 0.8 + i / 100,
@@ -217,6 +243,64 @@ def test_experiment_runs_end_to_end(client, alice):
         "record_type": "experiment_run", "filter": {"field": "notes", "op": "text", "value": "label noise"}}))
     assert {r["external_id"] for r in text["records"]} == {"r1", "r5"}
 
+
+
+INCIDENT = {
+    "name": "incident", "title": "Operations incident", "visibility": "private",
+    "description": "An outage or degradation of a production service, with severity and duration",
+    "schema": {"type": "object", "required": ["key", "service"], "properties": {
+        "key": {"type": "string"}, "title": {"type": "string"}, "service": {"type": "string"},
+        "severity": {"type": "string"}, "summary": {"type": "string"}, "minutes": {"type": "number"}}},
+    "roles": {"id": "key", "name": "title", "text": ["summary"], "facets": ["service", "severity"],
+              "measures": {"minutes": {"unit": "min", "direction": "minimize"}}, "features": ["minutes"]},
+}
+
+
+def test_similar_in_stages(client, alice):
+    runs = setup_runs(client, alice)
+    ok(alice.post("/kb/api/v1/record-types", json=INCIDENT), 201)
+    ops = ok(alice.post("/kb/api/v1/knowledge-bases", json={
+        "name": "Ops", "type": "records", "records_config": {"default_type": "incident"}}), 201)["id"]
+    ok(alice.post(f"/kb/api/v1/knowledge-bases/{ops}/records", json={"records": [
+        {"key": "i1", "title": "db outage", "service": "postgres", "severity": "high",
+         "summary": "primary database disk full, writes failed", "minutes": 42},
+        {"key": "i2", "title": "slow api", "service": "gateway", "severity": "low",
+         "summary": "latency spike after deploy", "minutes": 15}]}))
+    drain(client)
+
+    # narrow: only records matching the text, ranked with the probe's parameters
+    narrow = ok(alice.post("/kb/api/v1/records/similar", json={
+        "record_type": "experiment_run", "query": "label noise", "probe": {"params": {"learning_rate": 0.001}}}))
+    assert narrow["mode"] == "narrow" and narrow["anchor"] is None
+    assert [r["external_id"] for r in narrow["records"]] == ["r1", "r5"]       # r1 has exactly lr 0.001
+    assert all(r["text_rank"] and r["breakdown"]["text"] is not None for r in narrow["records"])
+
+    # expand (the default for a query alone): the best text match is the anchor, then parameters
+    expand = ok(alice.post("/kb/api/v1/records/similar", json={
+        "query": "label noise in the tail classes", "knowledge_base_ids": [runs]}))
+    assert expand["mode"] == "expand" and expand["anchor"]["external_id"] == "r1"
+    ids = [r["external_id"] for r in expand["records"]]
+    assert "r1" not in ids and ids[0] == "r5" and set(ids) == {"r2", "r3", "r4", "r5"}
+    assert all(r["breakdown"]["text"] is None for r in expand["records"])
+    assert expand["records"][-1]["external_id"] == "r2"                            # sgd, lr 0.1: furthest
+    assert expand["diversified"] is False and "features" not in expand["records"][0]
+    spread = ok(alice.post("/kb/api/v1/records/similar", json={
+        "query": "label noise in the tail classes", "limit": 3, "diversify": True, "mmr_lambda": 0.3}))
+    assert [r["external_id"] for r in spread["records"]] == ["r5", "r2", "r4"]    # r3 is too close to r5
+    assert spread["diversified"] is True
+    assert alice.post("/kb/api/v1/records/similar", json={
+        "query": "label noise", "diversify": True, "mmr_lambda": 2}).status_code == 400
+
+    # stage 0: no record_type, the query picks the type
+    routed = ok(alice.post("/kb/api/v1/records/similar", json={"query": "database outage"}))
+    assert routed["record_type"] == "alice:incident" and routed["anchor"]["external_id"] == "i1"
+    types = {t["record_type"]: t for t in routed["types"]}
+    assert types["alice:incident"]["chosen"] and not types["alice:experiment_run"]["chosen"]
+    assert types["alice:incident"]["score"] > types["alice:experiment_run"]["score"]
+    assert {r["record_type"] for r in routed["records"]} == {"alice:incident"}
+
+    assert alice.post("/kb/api/v1/records/similar", json={"limit": 3}).status_code == 400
+    assert alice.post("/kb/api/v1/records/similar", json={"query": "x", "mode": "sideways"}).status_code == 400
 
 def test_upsert_versions_items_and_freshness(client, alice):
     ok(alice.post("/kb/api/v1/record-types", json=EXPERIMENT_RUN), 201)
@@ -373,7 +457,7 @@ def test_compiled_sql_matches_reference(client, alice):
     assert ok(alice.post(f"/kb/api/v1/knowledge-bases/{kb_id}/records",
                          json={"record_type": "experiment_run", "records": records}))["created"] == 60
     td = typedef()
-    from kb_runtime.records.schema import parse_time
+    from agenticwf.kb.runtime.records.schema import parse_time
     for n in range(120):
         node = random_filter(rng)
         expected = {r["run_id"] for r in records if rq.evaluate(
@@ -423,18 +507,18 @@ def test_records_tools_forgive_small_model_mistakes(client, alice):
     bare field name all resolve; an ambiguous or unknown field still errors."""
     import asyncio
 
-    from kb_runtime.agentic.handles import Handles
-    from kb_runtime.agentic.tools import Scope, ToolContext, ToolError
-    from kb_runtime.agentic.tools.records import aggregate_records, query_records
-    from kb_core.orm.base.session import dispose_async_engine
+    from agenticwf.kb.runtime.agentic.handles import Handles
+    from agenticwf.kb.runtime.agentic.tools import Scope, ToolContext, ToolError
+    from agenticwf.kb.runtime.agentic.tools.records import aggregate_records, find_similar_records, query_records
+    from agenticwf.kb.core.orm.base.session import dispose_async_engine
 
     kb_id = setup_runs(client, alice)
     services = client.app.state.manager.services
 
     async def run(tool, args):
         try:
-            from kb_core.orm.base.session import async_session_scope
-            from kb_core.orm.models.kb import KnowledgeBase
+            from agenticwf.kb.core.orm.base.session import async_session_scope
+            from agenticwf.kb.core.orm.models.kb import KnowledgeBase
 
             async with async_session_scope(commit=False) as session:
                 kb = await session.get(KnowledgeBase, kb_id)
@@ -451,6 +535,11 @@ def test_records_tools_forgive_small_model_mistakes(client, alice):
     table = asyncio.run(run(aggregate_records, {"record_type": "experiment_run", "group_by": "optimizer",
                                                 "metrics": [{"fn": "best", "field": "accuracy"}]}))
     assert "| adamw | 0.97 |" in table
+    similar = asyncio.run(run(find_similar_records, {"query": "label noise in the tail classes", "limit": 2}))
+    assert 'mode="expand"' in similar and '<anchor id="r1" name="r1"' in similar
+    assert similar.count("<record ") == 2 and 'name="r5"' in similar
+    with pytest.raises(ToolError):
+        asyncio.run(run(find_similar_records, {"probe": {"model": "resnet50"}}))      # a probe needs its type
     with pytest.raises(ToolError):
         asyncio.run(run(query_records, {"record_type": "experiment_run", "filter": {"field": "nonsense", "op": "eq",
                                                                                      "value": 1}}))

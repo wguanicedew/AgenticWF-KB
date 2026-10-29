@@ -92,7 +92,7 @@ def runner_of(client):
 
 
 def run(coro_factory):
-    from kb_core.orm.base.session import dispose_async_engine
+    from agenticwf.kb.core.orm.base.session import dispose_async_engine
 
     async def wrapped():
         try:
@@ -103,7 +103,7 @@ def run(coro_factory):
 
 
 def sql(statement, **params):
-    from kb_core.orm.base.session import get_engine
+    from agenticwf.kb.core.orm.base.session import get_engine
 
     with get_engine().begin() as conn:
         return conn.execute(sa.text(statement), params)
