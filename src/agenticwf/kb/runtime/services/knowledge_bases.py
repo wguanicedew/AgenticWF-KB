@@ -262,7 +262,7 @@ class KnowledgeBaseService:
             if "visibility" in body or "groups" in body:
                 visibility = body.get("visibility") or kb.visibility
                 if visibility == "all" and not access.is_admin(ctx):
-                    raise Forbidden("only an admin shares a knowledge base with everyone")
+                    raise Forbidden("only an admin shares a knowledge base with everyone: send a sharing request")
                 kb.groups = access.check_share(ctx, visibility, body.get("groups", kb.groups) or [])
                 kb.visibility = visibility
             for field, allowed in (("default_item_visibility", access.VISIBILITIES), ("contribute", ("owner", "readers"))):

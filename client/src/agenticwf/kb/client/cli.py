@@ -5,12 +5,19 @@
     agenticwf kb ask "what changed in run 42?"       agentic search: an answer and its sources
     agenticwf kb call GET /knowledge-bases           any KB API call (the path under /api/v1)
 
-Behind Caddy it signs in as `agenticwf token` does (`agenticwf login`, AGENTICWF_TOKEN or
-AGENTICWF_CLIENT_SECRET) and finds the KB at AGENTICWF_API_URL + /kb. A standalone KB has its own
-token instead:
+Only the KB's URL is needed; the KB tells how to sign in:
 
-    export AGENTICWF_KB_URL=http://127.0.0.1:8766/kb
-    export AGENTICWF_KB_TOKEN=$(agenticwf-kb token)    # or AGENTICWF_KB_TOKEN_FILE
+    export AGENTICWF_KB_URL=https://host.example.org/app/kb    # behind Caddy
+    agenticwf login                                            # once
+
+Behind Caddy it signs in as `agenticwf token` does (`agenticwf login`, AGENTICWF_TOKEN or
+AGENTICWF_CLIENT_SECRET), with the Logto settings the server publishes (AGENTICWF_AUTH_URL,
+_CLIENT_ID, _RESOURCE override them). Without AGENTICWF_KB_URL it finds the KB at
+AGENTICWF_API_URL + /kb. A standalone KB has its own token instead: use its sign-in link
+(`agenticwf-kb token --ensure` prints it) as the URL, or give the token:
+
+    export AGENTICWF_KB_URL='http://127.0.0.1:8766/kb/?token=…'
+    export AGENTICWF_KB_TOKEN=$(agenticwf-kb token)          # or: the token (or _TOKEN_FILE)
 
 `--json` prints the API's data as it is (for jq).
 """

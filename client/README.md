@@ -12,26 +12,26 @@ agenticwf kb ask "what changed in run 42?" # agentic search: an answer and its s
 agenticwf kb call GET /knowledge-bases     # any KB API call
 ```
 
-Behind the AgenticWF server (Caddy, Logto) the commands sign in with `agenticwf login`; set the
-connection once (an administrator gets the values with
-`docker exec agenticwf cat /var/lib/agenticwf/logto/clients.env`):
+Only the KB's URL is needed: the KB tells how to sign in, and behind the AgenticWF server
+(Caddy, Logto) the server publishes the Logto settings. Sign in once with `agenticwf login`:
 
 ```bash
-export AGENTICWF_AUTH_URL=https://host.example.org
-export AGENTICWF_API_URL=https://host.example.org/app
-export AGENTICWF_CLIENT_ID=<Logto native app id>
-export AGENTICWF_RESOURCE=<API resource indicator>
+export AGENTICWF_KB_URL=https://host.example.org/app/kb
 agenticwf login
 ```
 
 Scripts and CI use a personal access token instead (`AGENTICWF_TOKEN=pat_…`), or a machine
-client (`AGENTICWF_CLIENT_ID` + `AGENTICWF_CLIENT_SECRET`).
+client (`AGENTICWF_CLIENT_ID` + `AGENTICWF_CLIENT_SECRET`). `AGENTICWF_AUTH_URL`,
+`AGENTICWF_API_URL`, `AGENTICWF_CLIENT_ID` and `AGENTICWF_RESOURCE`, when set, take precedence
+over what the server publishes (an administrator gets them with
+`docker exec agenticwf cat /var/lib/agenticwf/logto/clients.env`).
 
-A standalone KB has its own token instead:
+A standalone KB has its own token instead: use the sign-in link it prints as the URL, or give
+the token:
 
 ```bash
-export AGENTICWF_KB_URL=http://127.0.0.1:8766/kb
-export AGENTICWF_KB_TOKEN=$(docker exec agenticwf-kb agenticwf-kb token)
+export AGENTICWF_KB_URL='http://127.0.0.1:8766/kb/?token=…'   # docker exec agenticwf-kb agenticwf-kb token --ensure
+export AGENTICWF_KB_TOKEN=$(docker exec agenticwf-kb agenticwf-kb token)   # or: the token
 ```
 
 From Python (`KBClient.from_env()` finds the KB and its token as the command does):

@@ -36,6 +36,7 @@ from agenticwf.kb.runtime.services.knowledge import KnowledgeService
 from agenticwf.kb.runtime.services.tags import TagService
 from agenticwf.kb.runtime.services.knowledge_bases import KnowledgeBaseService
 from agenticwf.kb.runtime.services.prompts import PromptService
+from agenticwf.kb.runtime.services.sharing import ShareService
 from agenticwf.kb.runtime.services.sites import SiteService
 from agenticwf.kb.runtime.services.models import ModelService
 from agenticwf.kb.runtime.services.system import SystemService
@@ -103,6 +104,7 @@ def build_services(options: EngineOptions | None = None) -> KBServices:
     services.memory = enrichment.memory = knowledge.memory = kbs.memory = MemoryService(models)
     services.remote = remote
     services.sites = SiteService(kbs, knowledge)
+    services.sharing = ShareService(kbs, knowledge)
     services.prompts = PromptService()
     services.web = WebSearchService(models.secrets if hasattr(models, "_secrets") else None)
     return services

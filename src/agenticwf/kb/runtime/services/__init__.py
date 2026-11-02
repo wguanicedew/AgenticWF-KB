@@ -65,6 +65,7 @@ class KBServices:
     web: Any = field(default=None, repr=False)            # WebSearchService
     remote: Any = field(default=None, repr=False)         # RemoteService
     sites: Any = field(default=None, repr=False)          # SiteService
+    sharing: Any = field(default=None, repr=False)        # ShareService: requests to share KBs more widely
     prompts: Any = field(default=None, repr=False)        # PromptService
 
     def task_handlers(self) -> dict:

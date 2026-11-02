@@ -23,6 +23,8 @@ LOG = logging.getLogger(__name__)
 MODES = ("standalone", "authsvc", "service")
 TRUE = {"1", "true", "yes", "on"}
 DEFAULT_SERVICE_SCOPES_CAP = frozenset({"knowledge:read", "knowledge:write"})
+# Under base_path, public in every mode: how clients sign in (routes/system.py).
+WELL_KNOWN = "/.well-known/agenticwf"
 
 
 def _env(name: str, default: str) -> str:

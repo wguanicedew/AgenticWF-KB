@@ -4,6 +4,7 @@
     agenticwf-kb token --ensure         create it if missing (or import KB_TOKEN); print the sign-in link
     agenticwf-kb token --rotate         replace it: every browser is signed out, scripts need the new one
 
+The sign-in link also serves `agenticwf kb` as AGENTICWF_KB_URL (the token is in it).
 In the container: `docker exec agenticwf-kb agenticwf-kb token`. The token is kept in KB_TOKEN_FILE
 (default $KB_DATA_ROOT/secrets/token, mode 0600); KB_TOKEN or KB_TOKEN_FILE given to the container
 replace a generated one. The running KB picks up a new token without a restart.

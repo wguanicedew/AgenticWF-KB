@@ -13,6 +13,11 @@ def test_health_is_public(authsvc_client):
     assert response.status_code == 200 and response.json() == {"status": "ok"}
 
 
+def test_well_known_points_at_logto(authsvc_client):
+    body = authsvc_client.get("/kb/.well-known/agenticwf").json()
+    assert body == {"service": "kb", "mode": "authsvc", "auth": "logto", "base_path": "/kb"}
+
+
 def test_me_with_signed_context(authsvc_client):
     ctx = user(org="eic", roles=("researcher",), groups=["atlas"])
     body = get(authsvc_client, "/kb/api/v1/me", ctx).json()

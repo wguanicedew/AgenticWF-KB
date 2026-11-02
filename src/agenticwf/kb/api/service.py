@@ -27,7 +27,7 @@ from agenticwf.auth.context import AuthContext
 
 from agenticwf.kb.api.errors import BAD_REQUEST
 from agenticwf.kb.api.fronts import headers_of, respond_error, signed_scope, strip_identity_headers
-from agenticwf.kb.api.settings import Settings
+from agenticwf.kb.api.settings import WELL_KNOWN, Settings
 
 HEADER = "x-kb-principal"
 
@@ -67,7 +67,7 @@ class ServicePrincipal:
         self.app = app
         self.settings = settings
         base = settings.base_path
-        self.open_paths = {base + "/health"}
+        self.open_paths = {base + "/health", base + WELL_KNOWN}
         self.optional_paths = {base + "/api/v1/system/info"}
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:

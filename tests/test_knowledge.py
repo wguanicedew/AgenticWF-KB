@@ -344,3 +344,19 @@ def test_reassign_owner(client, alice):
     moved = Caller(client, user("user_9f", RW))
     assert moved.get(f"/kb/api/v1/knowledge-bases/{kb}").status_code == 200
     assert search(moved, "dashboard queue depth", [kb])
+
+
+def test_sharing_a_private_kb_can_share_its_documents(client, alice, bob):
+    kb_id = alice.post("/kb/api/v1/knowledge-bases", json={"name": "Was private"}).json()["data"]["id"]
+    upload(alice, kb_id, data=DOC, name="notes.md")
+    drain(client)
+    assert alice.get(f"/kb/api/v1/knowledge-bases/{kb_id}/knowledge").json()["data"][0]["visibility"] == "private"
+
+    alice.put(f"/kb/api/v1/knowledge-bases/{kb_id}", json={"visibility": "groups", "groups": ["org:eic"]})
+    assert bob.get(f"/kb/api/v1/knowledge-bases/{kb_id}/knowledge").json()["data"] == []     # the KB only
+    shared = alice.put(f"/kb/api/v1/knowledge-bases/{kb_id}", json={"visibility": "groups", "groups": ["org:eic"],
+                                                                     "apply_to_items": True}).json()["data"]
+    assert shared["applied_to_items"]["documents"] == 1
+    [doc] = bob.get(f"/kb/api/v1/knowledge-bases/{kb_id}/knowledge").json()["data"]
+    assert doc["visibility"] == "groups"
+    assert bob.put(f"/kb/api/v1/knowledge-bases/{kb_id}", json={"apply_to_items": True}).status_code == 403

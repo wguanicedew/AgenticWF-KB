@@ -23,6 +23,7 @@ def decide(policy, ctx, method, path):
 
 def test_public_and_pending_routes(policy):
     assert decide(policy, None, "GET", "/kb/health").allowed
+    assert decide(policy, None, "GET", "/kb/.well-known/agenticwf").allowed
     pending = user(scopes=())
     assert decide(policy, pending, "GET", "/kb/api/v1/me").allowed
     assert decide(policy, pending, "GET", "/kb/api/v1/system/info").code == "approval_pending"

@@ -218,3 +218,63 @@ def test_failed_crawl_and_access(client, alice, docs):
     drain(client)
     site = alice.get(f"/kb/api/v1/sites/{site['id']}").json()["data"]
     assert site["status"] == "failed" and "cannot fetch" in site["error_message"] and site["pages"] == 0
+
+
+def test_site_and_document_filters(client, alice, docs):
+    kb = alice.post("/kb/api/v1/knowledge-bases", json={"name": "Manual"}).json()["data"]["id"]
+    alice.post(f"/kb/api/v1/knowledge-bases/{kb}/knowledge/url", json={"url": docs.base + "/docs/latest/intro.html"})
+    latest = alice.post(f"/kb/api/v1/knowledge-bases/{kb}/sites",
+                        json={"url": docs.base + "/docs/latest/", "title": "Latest manual"}).json()["data"]
+    missing = alice.post(f"/kb/api/v1/knowledge-bases/{kb}/sites", json={"url": docs.base + "/docs/missing/"}).json()["data"]
+    drain(client)
+
+    def sites(query):
+        return {s["id"] for s in alice.get(f"/kb/api/v1/knowledge-bases/{kb}/sites?{query}").json()["data"]}
+
+    assert sites("") == {latest["id"], missing["id"]}
+    assert sites("keyword=LATEST") == {latest["id"]}                 # URL or title, any case
+    assert sites("title=manual") == {latest["id"]}
+    assert sites("url=/docs/missing") == {missing["id"]}
+    assert sites("status=failed") == {missing["id"]}
+    assert sites("keyword=nothing-like-this") == set()
+
+    def titles(query):
+        body = alice.get(f"/kb/api/v1/knowledge-bases/{kb}/knowledge?page_size=100&{query}").json()
+        return sorted(i["title"] for i in body["data"]), body["total"]
+
+    assert titles("site_id=none") == (["Intro"], 1)                # the page added on its own
+    assert titles(f"site_id={latest['id']}")[1] == 3
+    assert titles("url=guide/setup")[1] == 1                       # source URL
+    assert titles("keyword=guide/setup")[1] == 1                   # keyword covers the URL too
+    assert titles("title=intro")[1] == 1
+    assert titles("url=nowhere")[1] == 0
+    assert titles("citation=accessed")[1] == 4                     # the auto-built "… (accessed <date>)"
+    assert titles("keyword=accessed")[1] == 4                      # keyword covers the citation too
+    assert titles("citation=guide/setup")[1] == 1
+
+
+def test_site_visibility_applies_to_its_pages(client, alice, docs):
+    kb = alice.post("/kb/api/v1/knowledge-bases", json={"name": "Manual", "visibility": "groups",
+                                                         "groups": ["org:eic"]}).json()["data"]["id"]
+    bob = Caller(client, user("bob", ("app:access", "knowledge:read"), org="eic"))
+    site = alice.post(f"/kb/api/v1/knowledge-bases/{kb}/sites",
+                      json={"url": docs.base + "/docs/latest/", "visibility": "private"}).json()["data"]
+    drain(client)
+    query = {"query": "magnets ramped down", "knowledge_base_ids": [kb]}
+    assert bob.post("/kb/api/v1/knowledge-search", json=query).json()["data"] == []
+    assert bob.put(f"/kb/api/v1/sites/{site['id']}", json={"visibility": "all"}).status_code in (403, 404)
+
+    changed = alice.put(f"/kb/api/v1/sites/{site['id']}", json={"visibility": "all"})
+    assert changed.status_code == 200 and changed.json()["data"]["visibility"] == "all", changed.text
+    assert all(i["visibility"] == "all" for i in pages(alice, kb, site["id"]).values())
+    hits = bob.post("/kb/api/v1/knowledge-search", json=query).json()["data"]
+    assert hits and hits[0]["knowledge_title"] == "Intro"
+
+    alice.put(f"/kb/api/v1/sites/{site['id']}", json={"visibility": "private"})
+    assert bob.post("/kb/api/v1/knowledge-search", json=query).json()["data"] == []
+
+    # in a private KB everything stays private: asking for more is an error, not a silent no-op
+    own = alice.post("/kb/api/v1/knowledge-bases", json={"name": "Mine"}).json()["data"]["id"]
+    mine = alice.post(f"/kb/api/v1/knowledge-bases/{own}/sites", json={"url": docs.base + "/docs/latest/"}).json()["data"]
+    refused = alice.put(f"/kb/api/v1/sites/{mine['id']}", json={"visibility": "all"})
+    assert refused.status_code == 400 and "private" in refused.text

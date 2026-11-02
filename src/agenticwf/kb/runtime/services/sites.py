@@ -27,7 +27,7 @@ from agenticwf.auth.context import AuthContext
 
 from agenticwf.kb.core.common.logging import get_logger
 from agenticwf.kb.core.orm.base.session import async_session_scope
-from agenticwf.kb.core.orm.models.kb import Knowledge, KnowledgeSite, KnowledgeTagRelation, new_id, utcnow
+from agenticwf.kb.core.orm.models.kb import Embedding, Knowledge, KnowledgeSite, KnowledgeTagRelation, new_id, utcnow
 from agenticwf.kb.runtime import access
 from agenticwf.kb.runtime.errors import Conflict, Forbidden, Invalid, NotFound
 from agenticwf.kb.runtime.ingestion import crawl
@@ -146,12 +146,23 @@ class SiteService:
             await self._enqueue(session, site)
             return site_dict(site)
 
-    async def list(self, ctx: AuthContext, kb_ref: str) -> list[dict]:
+    async def list(self, ctx: AuthContext, kb_ref: str, filters: dict | None = None) -> list[dict]:
+        """The KB's sites; filters `keyword` (URL or title), `url`, `title` (substrings), `status`."""
+        filters = filters or {}
         async with async_session_scope(commit=False) as session:
             kb = await self.kbs.load(session, ctx, kb_ref)
-            rows = (await session.execute(sa.select(KnowledgeSite).where(
+            query = sa.select(KnowledgeSite).where(
                 KnowledgeSite.deleted_at.is_(None), access.items_clause(KnowledgeSite, ctx, [kb.id]))
-                .order_by(KnowledgeSite.created_at.desc()))).scalars().all()
+            if filters.get("keyword"):
+                like = f"%{filters['keyword']}%"
+                query = query.where(sa.or_(KnowledgeSite.url.ilike(like), KnowledgeSite.title.ilike(like)))
+            if filters.get("url"):
+                query = query.where(KnowledgeSite.url.ilike(f"%{filters['url']}%"))
+            if filters.get("title"):
+                query = query.where(KnowledgeSite.title.ilike(f"%{filters['title']}%"))
+            if filters.get("status"):
+                query = query.where(KnowledgeSite.status == filters["status"])
+            rows = (await session.execute(query.order_by(KnowledgeSite.created_at.desc()))).scalars().all()
             pages = await self._pages(session, [s.id for s in rows])
             return [site_dict(s, pages.get(s.id, 0)) for s in rows]
 
@@ -162,12 +173,25 @@ class SiteService:
 
     async def update(self, ctx: AuthContext, site_id: str, body: dict) -> dict:
         async with async_session_scope() as session:
-            site, _ = await self._load(session, ctx, site_id, manage=True)
+            site, kb = await self._load(session, ctx, site_id, manage=True)
             site.config = {**_config(body, site.config), "tag_ids": (site.config or {}).get("tag_ids", [])}
             if body.get("title"):
                 site.title = body["title"]
             if body.get("refresh_interval") is not None:
                 site.refresh_interval = max(0, int(body["refresh_interval"]))
+            if "visibility" in body or "groups" in body:
+                # the site's sharing applies to its pages, now and to the ones later crawls add
+                site.visibility, site.groups = self.knowledge._share(
+                    ctx, kb, body.get("visibility") or site.visibility, body.get("groups", site.groups), strict=True)
+                items = (await session.execute(sa.select(Knowledge).where(
+                    Knowledge.site_id == site.id, Knowledge.deleted_at.is_(None)).with_for_update())).scalars().all()
+                for item in items:
+                    await self.knowledge.reshare(session, ctx, kb, item, site.visibility, site.groups)
+                    item.updated_at = utcnow()
+                if items:
+                    await session.execute(sa.update(Embedding).where(
+                        Embedding.knowledge_id.in_([item.id for item in items])).values(
+                        visibility=site.visibility, groups=list(site.groups or [])))
             site.updated_at = utcnow()
             return site_dict(site, (await self._pages(session, [site.id])).get(site.id, 0))
 

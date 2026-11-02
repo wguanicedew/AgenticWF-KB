@@ -43,7 +43,7 @@ from agenticwf.auth.context import AuthContext
 from agenticwf.kb.api.errors import FORBIDDEN, NOT_FOUND, UNAUTHORIZED
 from agenticwf.kb.api.fronts import (SAFE_METHODS, cookies_of, headers_of, read_body, respond, respond_error, respond_html,
                            respond_json, safe_return_to, same_origin, signed_scope, strip_identity_headers)
-from agenticwf.kb.api.settings import Settings
+from agenticwf.kb.api.settings import WELL_KNOWN, Settings
 
 COOKIE_AGE = 30 * 86400
 CONTEXT_TTL = 8 * 3600
@@ -127,7 +127,7 @@ class StandaloneAuth:
 
         scope = strip_identity_headers(scope)
         method, path = scope["method"], scope["path"]
-        if path == self.base + "/health":
+        if path in (self.base + "/health", self.base + WELL_KNOWN):
             await self.app(scope, receive, send)
             return
         if path.startswith(self.base + "/auth/"):

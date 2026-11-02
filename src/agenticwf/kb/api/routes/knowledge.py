@@ -76,6 +76,36 @@ async def update_kb(kb_id: str, body: dict[str, Any] = Body(...), thread: KBThre
     return ok(await thread.update_kb(kb_id, body))
 
 
+@router.post("/knowledge-bases/{kb_id}/share-requests", status_code=201)
+async def request_share(kb_id: str, body: dict[str, Any] = Body(...), thread: KBThread = Depends(PEOPLE_WRITE)):
+    """Ask to share the KB more widely than you may yourself: `visibility` (groups | all), `groups`,
+    `apply_to_items` (default true), `note`."""
+    return ok(await thread.request_share(kb_id, body), status=201)
+
+
+@router.get("/share-requests")
+async def list_share_requests(scope: str = "mine", status: str | None = None, thread: KBThread = Depends(READ)):
+    """`scope=mine`: your requests; `scope=approve`: the pending ones you may decide."""
+    return ok(await thread.list_share_requests(scope, status))
+
+
+@router.post("/share-requests/{request_id}/approve")
+async def approve_share_request(request_id: str, body: dict[str, Any] | None = Body(None),
+                                thread: KBThread = Depends(PEOPLE_WRITE)):
+    return ok(await thread.decide_share_request(request_id, True, (body or {}).get("note", "")))
+
+
+@router.post("/share-requests/{request_id}/decline")
+async def decline_share_request(request_id: str, body: dict[str, Any] | None = Body(None),
+                                thread: KBThread = Depends(PEOPLE_WRITE)):
+    return ok(await thread.decide_share_request(request_id, False, (body or {}).get("note", "")))
+
+
+@router.delete("/share-requests/{request_id}")
+async def cancel_share_request(request_id: str, thread: KBThread = Depends(PEOPLE_WRITE)):
+    return ok(await thread.cancel_share_request(request_id))
+
+
 @router.delete("/knowledge-bases/{kb_id}")
 async def delete_kb(kb_id: str, purge: bool = False, thread: KBThread = Depends(PEOPLE_WRITE)):
     """`purge=true` erases every row at once instead of after `[maintenance] purge_after_days`."""
@@ -185,8 +215,9 @@ async def add_site(kb_id: str, body: dict[str, Any] = Body(...), thread: KBThrea
 
 
 @router.get("/knowledge-bases/{kb_id}/sites")
-async def list_sites(kb_id: str, thread: KBThread = Depends(READ)):
-    return ok(await thread.list_sites(kb_id))
+async def list_sites(kb_id: str, keyword: str | None = None, url: str | None = None, title: str | None = None,
+                     status: str | None = None, thread: KBThread = Depends(READ)):
+    return ok(await thread.list_sites(kb_id, {"keyword": keyword, "url": url, "title": title, "status": status}))
 
 
 @router.get("/sites/{site_id}")
@@ -217,12 +248,15 @@ async def add_manual(kb_id: str, body: dict[str, Any] = Body(...), thread: KBThr
 
 @router.get("/knowledge-bases/{kb_id}/knowledge")
 async def list_knowledge(kb_id: str, page: int = 1, page_size: int = 20, keyword: str | None = None,
+                         title: str | None = None, url: str | None = None, citation: str | None = None,
                          file_type: str | None = None, parse_status: str | None = None,
                          tag_ids: str | None = None, tag_id: str | None = None, site_id: str | None = None,
                          thread: KBThread = Depends(READ)):
     page, page_size = page_args(page, page_size)
     tags = _list(tag_ids) + ([tag_id] if tag_id else [])
-    items, total = await thread.list_knowledge(kb_id, page, page_size, {"keyword": keyword, "file_type": file_type,
+    items, total = await thread.list_knowledge(kb_id, page, page_size, {"keyword": keyword, "title": title, "url": url,
+                                                                        "citation": citation,
+                                                                        "file_type": file_type,
                                                                         "parse_status": parse_status,
                                                                         "tag_ids": tags, "site_id": site_id})
     return ok_list(items, total, page, page_size)

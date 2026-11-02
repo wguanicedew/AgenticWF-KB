@@ -1,4 +1,4 @@
-"""System routes: health, the caller's identity, system info, the management page.
+"""System routes: health, how clients sign in, the caller's identity, system info, the management page.
 
 Every route reaches the runtime through a thread: a KBThread for the principal
 (`thread_for`), or the manager's SystemThread where there is no principal (health, and system
@@ -18,6 +18,7 @@ from agenticwf.auth.context import AuthContext
 
 from agenticwf.kb.api.deps import KBThread, is_approved, manager_of, optional_principal, thread_for
 from agenticwf.kb.api.errors import UNAUTHORIZED, KBError, ok
+from agenticwf.kb.api.settings import WELL_KNOWN
 
 router = APIRouter()
 
@@ -28,6 +29,23 @@ async def health(request: Request):
     if not await manager_of(request).system.healthy():
         return JSONResponse({"status": "unavailable", "database": "down"}, status_code=503)
     return {"status": "ok"}
+
+
+# How a client signs in here (`auth`): "logto" (authsvc mode: the Logto settings are at
+# <application URL>/auth/config, the application URL being this KB's URL without base_path),
+# "token" (standalone: the KB's own token) or "none" (service mode: other services only).
+# agenticwf_auth_cli.service_access reads it, so `agenticwf kb` needs only AGENTICWF_KB_URL.
+_SIGN_IN = {"authsvc": "logto", "standalone": "token", "service": "none"}
+
+
+@router.get(WELL_KNOWN, include_in_schema=False)
+async def well_known(request: Request):
+    """Public, plain JSON: the service, its run mode and how to sign in."""
+    settings = request.app.state.settings
+    body = {"service": "kb", "mode": settings.mode, "auth": _SIGN_IN[settings.mode], "base_path": settings.base_path}
+    if settings.mode == "standalone":
+        body["token_help"] = "agenticwf-kb token (in the container: docker exec agenticwf-kb agenticwf-kb token)"
+    return body
 
 
 @router.get("/api/v1/me")

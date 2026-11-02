@@ -4,7 +4,7 @@ A small Python client for the KB API (docs/api.md), with the HPO warm-start help
 
     kb = KBClient("http://127.0.0.1:8766/kb", api_key=token)        # standalone (the token)
     kb = KBClient("https://host/app/kb", bearer=agenticwf_token)      # authsvc, through Caddy
-    kb = KBClient.from_env()            # as `agenticwf kb` does: the sign-in of `agenticwf login`
+    kb = KBClient.from_env()            # as `agenticwf kb` does: AGENTICWF_KB_URL is enough
 
 It speaks the `{success, data}` envelope and raises KBClientError on `success: false`. It has no
 dependency on the server packages; `from_env` and the `agenticwf kb` command (cli.py) need
@@ -39,10 +39,12 @@ class KBClient:
 
     @classmethod
     def from_env(cls, url: str | None = None, token: str | None = None, **options) -> "KBClient":
-        """The KB and its tokens as `agenticwf` finds them (agenticwf_auth_cli.service_access):
-        AGENTICWF_KB_URL and AGENTICWF_KB_TOKEN (a standalone KB's own token), else the Logto
-        sign-in and AGENTICWF_API_URL + /kb. Logto tokens are refreshed as they expire. `options`
-        are Config fields (auth_url, api_url, …) and the constructor's (timeout, http)."""
+        """The KB and its tokens as `agenticwf` finds them (agenticwf_auth_cli.service_access).
+        AGENTICWF_KB_URL alone is enough: the KB tells how it signs clients in. Behind Caddy that
+        is the Logto sign-in of `agenticwf login`, whose settings the server publishes; a
+        standalone KB has its own token: AGENTICWF_KB_TOKEN, or its sign-in link as the URL.
+        Without the URL, the KB is at AGENTICWF_API_URL + /kb. Logto tokens are refreshed as they
+        expire. `options` are Config fields (auth_url, api_url, …) and the constructor's (timeout, http)."""
         from agenticwf_auth_cli import service_access
 
         auth = {k: options.pop(k) for k in ("auth_url", "api_url", "client_id", "resource", "scopes") if k in options}

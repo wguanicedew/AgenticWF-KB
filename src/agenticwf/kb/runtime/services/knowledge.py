@@ -30,8 +30,8 @@ from agenticwf.kb.core.common.config import config_get, config_has_option
 from agenticwf.kb.core.common.logging import get_logger
 from agenticwf.kb.core.orm.base.session import async_session_scope, get_engine
 from agenticwf.kb.core.orm.models.indexes import ensure_vector_index
-from agenticwf.kb.core.orm.models.kb import (SOURCE_CHUNK, Chunk, Embedding, Knowledge, KnowledgeBase, KnowledgeVersion,
-                                   new_id, utcnow)
+from agenticwf.kb.core.orm.models.kb import (SOURCE_CHUNK, Chunk, Embedding, Knowledge, KnowledgeBase, KnowledgeSite,
+                                   KnowledgeVersion, new_id, utcnow)
 from agenticwf.kb.runtime import access, citation
 from agenticwf.kb.runtime.redaction import Redactor
 from agenticwf.kb.runtime.errors import Conflict, Forbidden, Invalid, NotFound
@@ -176,7 +176,13 @@ class KnowledgeService:
             raise Forbidden("only the item's owner, the KB owner or an admin changes it")
         return item, kb
 
-    def _share(self, ctx: AuthContext, kb: KnowledgeBase, visibility: str | None, groups) -> tuple[str, list[str]]:
+    def _share(self, ctx: AuthContext, kb: KnowledgeBase, visibility: str | None, groups,
+               strict: bool = False) -> tuple[str, list[str]]:
+        """`strict` (a change to an existing item or site): sharing in a private KB is an error,
+        not silently kept private."""
+        if strict and kb.visibility == "private" and visibility not in (None, "private"):
+            raise Invalid("this knowledge base is private, so its documents stay private: "
+                          "share the knowledge base first (its settings)")
         visibility = "private" if kb.visibility == "private" else (visibility or kb.default_item_visibility)
         return visibility, access.check_share(ctx, visibility, groups or [])
 
@@ -566,12 +572,22 @@ class KnowledgeService:
                                                access.items_clause(Knowledge, ctx, [kb.id]))
             if filters.get("keyword"):
                 like = f"%{filters['keyword']}%"
+                query = query.where(sa.or_(Knowledge.title.ilike(like), Knowledge.file_name.ilike(like),
+                                           Knowledge.source.ilike(like), Knowledge.citation["text"].astext.ilike(like)))
+            if filters.get("title"):
+                like = f"%{filters['title']}%"
                 query = query.where(sa.or_(Knowledge.title.ilike(like), Knowledge.file_name.ilike(like)))
+            if filters.get("url"):
+                query = query.where(Knowledge.source.ilike(f"%{filters['url']}%"))
+            if filters.get("citation"):
+                query = query.where(Knowledge.citation["text"].astext.ilike(f"%{filters['citation']}%"))
             if filters.get("file_type"):
                 query = query.where(Knowledge.file_type == filters["file_type"])
             if filters.get("parse_status"):
                 query = query.where(Knowledge.parse_status == filters["parse_status"])
-            if filters.get("site_id"):
+            if filters.get("site_id") == "none":           # uploads and single URLs: no site
+                query = query.where(Knowledge.site_id.is_(None))
+            elif filters.get("site_id"):
                 query = query.where(Knowledge.site_id == filters["site_id"])
             if filters.get("tag_ids"):
                 from agenticwf.kb.runtime.services.tags import item_tag_clause, resolve_tags
@@ -650,6 +666,51 @@ class KnowledgeService:
         return item.file_name, await anyio.to_thread.run_sync(self.storage.read, item.file_path)
 
     # -- changing ------------------------------------------------------------------------------------
+    async def reshare_kb(self, ctx: AuthContext, kb_ref: str) -> dict:
+        """Give every document and site of the KB the KB's own visibility and groups: after a private
+        KB is shared, its documents (kept private while it was) follow. The KB's owner or an admin."""
+        async with async_session_scope() as session:
+            kb = await self.kbs.load(session, ctx, kb_ref)
+            if not access.can_manage(ctx, kb):
+                raise Forbidden("only the owner changes a knowledge base")
+            return await self.reshare_kb_in(session, ctx, kb)
+
+    async def reshare_kb_in(self, session, ctx: AuthContext, kb: KnowledgeBase) -> dict:
+        """reshare_kb in the caller's transaction, whose permission the caller checked (the KB's
+        manager, or the approver of a sharing request)."""
+        visibility, groups = kb.visibility, list(kb.groups or [])
+        sites = (await session.execute(sa.select(KnowledgeSite).where(
+            KnowledgeSite.knowledge_base_id == kb.id, KnowledgeSite.deleted_at.is_(None)).with_for_update())).scalars().all()
+        for site in sites:
+            site.visibility, site.groups, site.updated_at = visibility, groups, utcnow()
+        items = (await session.execute(sa.select(Knowledge).where(
+            Knowledge.knowledge_base_id == kb.id, Knowledge.deleted_at.is_(None)).with_for_update())).scalars().all()
+        for item in items:
+            await self.reshare(session, ctx, kb, item, visibility, groups)
+            item.updated_at = utcnow()
+        if items:
+            await session.execute(sa.update(Embedding).where(
+                Embedding.knowledge_id.in_([item.id for item in items])).values(visibility=visibility, groups=groups))
+        return {"documents": len(items), "sites": len(sites), "visibility": visibility, "groups": groups}
+
+    async def reshare(self, session, ctx: AuthContext, kb: KnowledgeBase, item: Knowledge, visibility: str,
+                      groups) -> None:
+        """Set the item's visibility and groups; the caller updates the index rows' copies."""
+        before = item.visibility
+        item.visibility, item.groups = self._share(ctx, kb, visibility, groups, strict=True)
+        if self.wiki is not None and before != item.visibility and item.parse_status == "completed":
+            # only items every reader of the KB may read feed its wiki (docs/llm-wiki.md)
+            from agenticwf.kb.runtime.wiki.service import feeds_wiki
+
+            if not feeds_wiki(item, kb):
+                await self.wiki.queue_retract(session, item)
+            elif self.wiki.enabled(kb):
+                from agenticwf.kb.core.orm.models.ext import WikiPendingOp
+
+                session.add(WikiPendingOp(knowledge_base_id=kb.id, knowledge_id=item.id, op="ingest",
+                                          payload={"content_hash": item.content_hash, "rebuild": True}))
+                await self.wiki.trigger(session, kb)
+
     async def update(self, ctx: AuthContext, knowledge_id: str, body: dict) -> dict:
         async with async_session_scope() as session:
             item, kb = await self._managed(session, ctx, knowledge_id)
@@ -665,21 +726,8 @@ class KnowledgeService:
                     raise Invalid("enable_status must be enabled or disabled")
                 item.enable_status = body["enable_status"]
             if "visibility" in body or "groups" in body:
-                before = item.visibility
-                item.visibility, item.groups = self._share(ctx, kb, body.get("visibility") or item.visibility,
-                                                           body.get("groups", item.groups))
-                if self.wiki is not None and before != item.visibility and item.parse_status == "completed":
-                    # only items every reader of the KB may read feed its wiki (docs/llm-wiki.md)
-                    from agenticwf.kb.runtime.wiki.service import feeds_wiki
-
-                    if not feeds_wiki(item, kb):
-                        await self.wiki.queue_retract(session, item)
-                    elif self.wiki.enabled(kb):
-                        from agenticwf.kb.core.orm.models.ext import WikiPendingOp
-
-                        session.add(WikiPendingOp(knowledge_base_id=kb.id, knowledge_id=item.id, op="ingest",
-                                                  payload={"content_hash": item.content_hash, "rebuild": True}))
-                        await self.wiki.trigger(session, kb)
+                await self.reshare(session, ctx, kb, item, body.get("visibility") or item.visibility,
+                                   body.get("groups", item.groups))
             item.updated_at = utcnow()
             tags = await self._tags(session, ctx, item, body.get("tag_ids"))
             # the copies on the index rows, so the next search applies the change

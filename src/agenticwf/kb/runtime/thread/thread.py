@@ -19,12 +19,13 @@ from dataclasses import dataclass, field
 
 from agenticwf.auth.context import AuthContext
 
-from agenticwf.kb.runtime.access import group_names, principal_groups
+from agenticwf.kb.runtime.access import group_names, is_admin, principal_groups
 from agenticwf.kb.runtime.features import enabled as feature_enabled  # noqa: F401  (hosts check [features] here)
 from agenticwf.kb.runtime.errors import Forbidden
 from agenticwf.kb.runtime.remote import is_remote
 from agenticwf.kb.runtime.retrieval.search import SearchOptions
 from agenticwf.kb.runtime.services import KBServices
+from agenticwf.kb.runtime.services.sharing import managed_groups
 
 SCOPE_ADMIN = "admin"
 
@@ -70,6 +71,8 @@ class KBThread:
             "is_machine": ctx.is_machine,
             "auth_method": ctx.auth_method,
             "personal_knowledge_base_id": await self.services.knowledge_bases.ensure_personal(ctx),
+            # whose sharing requests they decide: an admin's all, a group admin's for their groups
+            "approves_shares": is_admin(ctx) or bool(managed_groups(ctx)),
         }
 
     async def system_info(self) -> dict:
@@ -146,7 +149,22 @@ class KBThread:
         kb = await self.services.knowledge_bases.update(self.auth, ref, body)
         if body.get("faq_config") is not None:
             await self.services.faq.reindex(self.auth, kb["id"])
+        if body.get("apply_to_items"):   # its documents and sites follow the KB's new sharing
+            kb["applied_to_items"] = await self.services.knowledge.reshare_kb(self.auth, kb["id"])
         return kb
+
+    # -- sharing requests (docs/data-model.md, Sharing requests) ----------------------------------------
+    async def request_share(self, kb_ref: str, body: dict) -> dict:
+        return await self.services.sharing.create(self.auth, kb_ref, body)
+
+    async def list_share_requests(self, scope: str = "mine", status: str | None = None) -> list[dict]:
+        return await self.services.sharing.list(self.auth, scope, status)
+
+    async def decide_share_request(self, request_id: str, approve: bool, note: str = "") -> dict:
+        return await self.services.sharing.decide(self.auth, request_id, approve, note)
+
+    async def cancel_share_request(self, request_id: str) -> dict:
+        return await self.services.sharing.cancel(self.auth, request_id)
 
     async def delete_kb(self, ref: str, purge: bool = False) -> None:
         await self.services.knowledge_bases.delete(self.auth, ref, purge)
@@ -164,8 +182,8 @@ class KBThread:
     async def add_site(self, kb_ref: str, body: dict) -> dict:
         return await self.services.sites.create(self.auth, kb_ref, body)
 
-    async def list_sites(self, kb_ref: str) -> list[dict]:
-        return await self.services.sites.list(self.auth, kb_ref)
+    async def list_sites(self, kb_ref: str, filters: dict | None = None) -> list[dict]:
+        return await self.services.sites.list(self.auth, kb_ref, filters)
 
     async def get_site(self, site_id: str) -> dict:
         return await self.services.sites.get(self.auth, site_id)

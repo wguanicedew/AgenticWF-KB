@@ -1,3 +1,0 @@
-[console_scripts]
-agenticwf-kb = kb_api.cli:main
-agenticwf-kb-worker = kb_api.worker:main

@@ -23,6 +23,12 @@ def test_health_needs_no_token(standalone_client):
     assert standalone_client.get("/kb/health").status_code == 200
 
 
+def test_well_known_needs_no_token(standalone_client):
+    body = standalone_client.get("/kb/.well-known/agenticwf").json()
+    assert body["service"] == "kb" and body["mode"] == "standalone" and body["auth"] == "token"
+    assert body["base_path"] == "/kb" and "agenticwf-kb token" in body["token_help"]
+
+
 def test_token_file_is_created_once_and_rotates(tmp_path):
     from agenticwf.kb.api.standalone import ensure_token
 

@@ -98,7 +98,7 @@ def format_text(c: dict) -> str:
     if c.get("title"):
         parts.append(c["title"])
     for key in ("publisher", "version"):
-        if c.get(key):
+        if c.get(key) and not (key == "publisher" and c[key] == c.get("title")):    # a page's site name is often its title
             parts.append(("version " if key == "version" and not str(c[key]).lower().startswith("v") else "")
                          + str(c[key]))
     text = ". ".join(p.rstrip(".") for p in parts)

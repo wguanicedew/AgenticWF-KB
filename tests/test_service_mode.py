@@ -11,6 +11,7 @@ def principal(ctx):
 
 def test_health_and_info_answer_without_a_principal(service_client):
     assert service_client.get("/kb/health").status_code == 200
+    assert service_client.get("/kb/.well-known/agenticwf").json()["auth"] == "none"
     info = service_client.get("/kb/api/v1/system/info")
     assert info.status_code == 200 and info.json()["data"]["mode"] == "service"
 

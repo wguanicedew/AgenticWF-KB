@@ -11,6 +11,10 @@ required_scopes: [app:access]   # account approval; matches KB_REQUIRED_SCOPES
 rules:
   - path: /kb/health
     public: true
+  # How clients sign in (`agenticwf kb` with only AGENTICWF_KB_URL)
+  - path: /kb/.well-known/agenticwf
+    methods: [GET]
+    public: true
   - path: /kb/static/**
     methods: [GET, HEAD]
     public: true
@@ -56,6 +60,8 @@ rules:
   # people-only writes: KB and model management
   - {path: /kb/api/v1/knowledge-bases, methods: [POST], scopes: [knowledge:write], allow_machine: false}
   - {path: /kb/api/v1/knowledge-bases/*, methods: [PUT, DELETE], scopes: [knowledge:write], allow_machine: false}
+  - {path: /kb/api/v1/knowledge-bases/*/share-requests, methods: [POST], scopes: [knowledge:write], allow_machine: false}
+  - {path: /kb/api/v1/share-requests/**, methods: [POST, DELETE], scopes: [knowledge:write], allow_machine: false}
   - {path: /kb/api/v1/models/**, methods: [POST, PUT, DELETE], scopes: [knowledge:write], allow_machine: false}
   - {path: /kb/api/v1/remotes, methods: [POST], scopes: [knowledge:write], allow_machine: false}
   - {path: /kb/api/v1/remotes/**, methods: [POST, PUT, DELETE], scopes: [knowledge:write], allow_machine: false}

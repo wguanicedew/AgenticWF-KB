@@ -194,6 +194,27 @@ class KnowledgeSite(BASE, ModelBase, _Owned, _Visible):
     __table_args__ = (Index("ix_kb_sites_kb", "knowledge_base_id"),)
 
 
+class KnowledgeShareRequest(BASE, ModelBase, _Owned, _Visible):
+    """A KB's owner asks to share it more widely than they may themselves (docs/data-model.md,
+    Sharing requests): with everyone (an admin approves) or with groups they are not in (each
+    group's admins, or an admin). `visibility` / `groups` are what is asked for; the owner columns
+    are the requester."""
+
+    __tablename__ = "kb_share_requests"
+
+    id = Column(String(36), primary_key=True, default=new_id)
+    knowledge_base_id = Column(String(36), ForeignKey("kb_knowledge_bases.id"), nullable=False)
+    apply_to_items = Column(Boolean, nullable=False, default=True)   # its documents and sites follow
+    note = Column(Text, nullable=False, default="")
+    status = Column(String(16), nullable=False, default="pending")   # pending | approved | declined | cancelled
+    decided_by = Column(String(255), nullable=True)
+    decided_at = _ts(nullable=True)
+    decision_note = Column(Text, nullable=False, default="")
+
+    __table_args__ = (Index("ix_kb_share_requests_kb", "knowledge_base_id"),
+                      Index("ix_kb_share_requests_status", "status"))
+
+
 class KnowledgeConflict(BASE, ModelBase, _Timestamps):
     """A newer item repeating or contradicting an older one (docs/ingestion.md, Conflicts)."""
 

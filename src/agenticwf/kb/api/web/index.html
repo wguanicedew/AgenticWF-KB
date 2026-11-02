@@ -6,6 +6,7 @@
 <meta name="kb-base" content="{{BASE}}">
 <meta name="kb-mode" content="{{MODE}}">
 <title>AgenticWF KB</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x2='1' y2='1'%3E%3Cstop stop-color='%23189a6c'/%3E%3Cstop offset='1' stop-color='%232457c5'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3Ctext x='16' y='22' font-family='sans-serif' font-size='14' font-weight='700' fill='white' text-anchor='middle'%3EKB%3C/text%3E%3C/svg%3E">
 <meta name="color-scheme" content="light dark">
 <style>
 :root{--bg:#fff;--fg:#1d2330;--muted:#5d6676;--line:#dde1e8;--panel:#f6f7f9;--accent:#2457c5;--bad:#b42318;--ok:#18794e;--warn:#9a6700}
@@ -31,6 +32,7 @@ textarea{width:100%;min-height:70px}
 .kb-list li{padding:6px 8px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;gap:6px}
 .kb-list li.active{background:var(--bg);outline:1px solid var(--line)}
 .kb-list small{color:var(--muted)}
+.kb-list .kb-sub{display:block;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .kb-list li.kb-group{cursor:default;padding:10px 8px 2px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:8px 0 12px;flex-wrap:wrap}
 .tabs button{border:none;border-bottom:2px solid transparent;border-radius:0;background:none;padding:6px 10px}
@@ -80,6 +82,7 @@ pre.json{white-space:pre-wrap;font:12px ui-monospace,Menlo,monospace;background:
   <aside>
     <h2>Knowledge bases</h2>
     <ul class="kb-list" id="kbs"></ul>
+    <a class="side-link hidden" id="shares-link">📨 Sharing requests <span class="badge hidden" id="shares-count"></span></a>
     <a class="side-link hidden" id="memory-link">🧠 My memory</a>
     <a class="side-link hidden" id="remotes-link">🔗 Remote knowledge bases</a>
     <a class="side-link hidden" id="web-link">🔎 Web search</a>
@@ -122,7 +125,7 @@ const API = BASE + "/api/v1";
 // proxy's prefix otherwise (/app/auth/* when the KB is at /app/kb, /auth/* when it is at /kb).
 const AUTH = MODE === "standalone" ? BASE
   : BASE.slice(0, BASE.length - document.querySelector('meta[name="kb-base"]').content.length);
-let state = {kbs: [], kb: null, tab: "documents", me: null};
+let state = {kbs: [], kb: null, tab: "documents", me: null, docFilter: {}};
 let FEATURES = {};
 let PRESETS = [];                 // /agentic-search/presets: which exist, which is the default
 
@@ -186,10 +189,16 @@ async function loadMe() {
   if (FEATURES.web) { $("web-link").classList.remove("hidden"); $("web-link").onclick = openWeb; }
   if (isAdmin()) { $("prompts-link").classList.remove("hidden"); $("prompts-link").onclick = openPrompts; }
   if (isAdmin()) { $("tools-link").classList.remove("hidden"); $("tools-link").onclick = openTools; }
+  if (MODE === "authsvc") { $("shares-link").classList.remove("hidden"); $("shares-link").onclick = openShares; countShares(); }
   try { PRESETS = (await api("/agentic-search/presets")).data; } catch (_) { PRESETS = []; }
 }
 
 const isAdmin = () => ((state.me && state.me.scopes) || []).includes("admin");
+// A document's or site's visibility menu: in a private KB everything stays private, so the other
+// choices are shown but disabled, with the reason
+const PRIVATE_KB = "This knowledge base is private, so its documents and sites stay private: share the knowledge base first (Settings)";
+const visOptions = (kb, current) => ["private", "groups", "all"].map(v => `<option ${v === current ? "selected" : ""} ${kb.visibility === "private" && v !== "private" ? `disabled title="${esc(PRIVATE_KB)}"` : ""}>${v}</option>`).join("");
+const privateNote = kb => kb.visibility === "private" ? `<p class="muted">🔒 ${esc(PRIVATE_KB)}.</p>` : "";
 
 // Mark the open page in the sidebar: a side link's id, or null (a knowledge base).
 function activate(linkId) {
@@ -214,7 +223,22 @@ const wikiOn = kb => FEATURES.wiki && kb.indexing_strategy && kb.indexing_strate
 function kbGroup(kb) {
   if (kb.remote) return `From ${kb.remote}`;
   if (state.me && kb.owner_subject === state.me.subject) return "Mine";
-  return kb.owner_subject === "system" ? "System" : "Shared with me";
+  if (kb.owner_subject === "system") return "System";
+  return sharedWith(kb) ? "Shared with me" : "Others' (admin view)";   // an admin sees every KB
+}
+// Why a KB that is not yours is listed: shared with everyone, or with one of your groups (by name);
+// null when only an admin sees it
+function sharedWith(kb) {
+  if (kb.visibility === "all") return "everyone";
+  const mine = kb.visibility === "groups" ? (kb.groups || []).filter(g => myGroups().includes(g)) : [];
+  return mine.length ? mine.map(groupLabel).join(", ") : null;
+}
+const shortOwner = s => s && s.length > 14 ? s.slice(0, 12) + "…" : s;
+// The line under a KB that is not yours: whose it is, and with whom it is shared
+function kbSub(kb) {
+  if (kb.remote || kb.owner_subject === "system" || (state.me && kb.owner_subject === state.me.subject)) return "";
+  const via = sharedWith(kb);
+  return `by ${shortOwner(kb.owner_subject)} · ${via ? "shared with " + via : kb.visibility}`;
 }
 
 async function loadKbs(select) {
@@ -228,10 +252,10 @@ async function loadKbs(select) {
   const groups = new Map();
   for (const kb of kbs) { const g = kbGroup(kb); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(kb); }
   const ul = $("kbs");
-  const order = g => ["Mine", "Shared with me", "System"].indexOf(g) + 1 || 4;
+  const order = g => ["Mine", "Shared with me", "System", "Others' (admin view)"].indexOf(g) + 1 || 5;
   ul.innerHTML = [...groups].sort((a, b) => order(a[0]) - order(b[0])).map(([g, list]) => `<li class="kb-group">${esc(g)}</li>` + list.map(kb =>
-    `<li data-id="${esc(kb.id)}" class="${state.kb && state.kb.id === kb.id ? "active" : ""}" title="${esc(kb.ref)}">
-    <span>${esc(kb.name)}${kb.type !== "document" ? ` <span class="badge">${esc(kb.type)}</span>` : ""}${wikiOn(kb) ? ' <span class="badge">wiki</span>' : ""}</span>
+    `<li data-id="${esc(kb.id)}" class="${state.kb && state.kb.id === kb.id ? "active" : ""}" title="${esc(kb.ref)}${kbSub(kb) ? " · owner " + esc(kb.owner_subject) : ""}">
+    <span>${esc(kb.name)}${kb.type !== "document" ? ` <span class="badge">${esc(kb.type)}</span>` : ""}${wikiOn(kb) ? ' <span class="badge">wiki</span>' : ""}${kbSub(kb) ? `<span class="kb-sub">${esc(kbSub(kb))}</span>` : ""}</span>
     <small>${kb.knowledge_count ?? ""}</small></li>`).join("")).join("");
   ul.querySelectorAll("li[data-id]").forEach(li => li.onclick = () => openKb(li.dataset.id));
   if (select) openKb(select);
@@ -243,11 +267,12 @@ function tabsFor(kb) {
   if (kb.type === "faq") return [["faq", "Entries"], ...common, ["settings", "Settings"]];
   if (kb.type === "records") return [["records", "Records"], ["query", "Query"], ["types", "Record types"],
                                      ["search", "Search"], ["agentic", "Agentic search"], ["settings", "Settings"]];
-  return [["documents", "Documents"], ...(wikiOn(kb) ? [["wiki", "Wiki"]] : []), ...common,
+  return [["documents", "Documents"], ["sites", "Sites"], ...(wikiOn(kb) ? [["wiki", "Wiki"]] : []), ...common,
           ["freshness", "Freshness"], ["settings", "Settings"]];
 }
 
 async function openKb(id) {
+  if (!state.kb || state.kb.id !== id) state.docFilter = {};
   state.kb = state.kbs.find(k => k.id === id) || (await api(`/knowledge-bases/${id}`)).data;
   const tabs = tabsFor(state.kb);
   if (!tabs.some(([t]) => t === state.tab)) state.tab = tabs[0][0];
@@ -270,6 +295,7 @@ function openFromHash() {
   if (h.has("web") && FEATURES.web) return openWeb();
   if (h.has("prompts") && isAdmin()) return openPrompts();
   if (h.has("tools") && isAdmin()) return openTools();
+  if (h.has("shares")) return openShares();
   if (h.get("kb")) { state.tab = h.get("tab") || state.tab; state.page = h.get("page") || undefined; return openKb(h.get("kb")); }
 }
 
@@ -287,16 +313,20 @@ async function documentsPane(pane, kb) {
         <div class="row"><input name="citation_text" placeholder="or the full citation as you want it shown" style="flex:1"></div>
       </details>
     </form>
-    <form id="add-url" class="row"><input name="url" type="url" placeholder="https://… (a page to ingest)" style="flex:1" required>
-      <label class="muted" title="Import every page under this URL; Refresh later picks up changed, new and removed pages"><input type="checkbox" name="site"> whole site</label>
-      <input name="max_pages" type="number" min="1" max="5000" placeholder="max pages" title="at most this many pages (default 500)" style="width:8em" class="hidden">
+    <form id="add-url" class="row"><input name="url" type="url" placeholder="https://… (a page to ingest; whole sites are in the Sites tab)" style="flex:1" required>
       <button>Add URL</button></form>
     <details id="redact-box"><summary class="muted">Remove sensitive text (bank details, personal data …) from this knowledge base</summary>
       <form id="redact" class="row"><textarea name="terms" rows="2" placeholder="text to remove, one per line (e.g. an IBAN or account number)" style="flex:1" required></textarea>
         <label class="muted"><input type="checkbox" name="regex"> regular expressions</label>
         <button name="preview">Preview</button><button type="button" name="apply" class="primary" disabled>Redact</button></form>
       <div id="redact-out" class="muted"></div></details>
-    <div id="sites"></div>
+    <h3>Documents</h3>
+    <form id="doc-filter" class="row">
+      <select name="field"><option value="keyword">title, URL or citation</option><option value="title">title</option><option value="url">URL / file name</option><option value="citation">citation</option></select>
+      <input name="q" type="search" placeholder="Search documents" style="flex:1">
+      <select name="site_id"><option value="">all sources</option><option value="none">not from a site</option></select>
+      <select name="parse_status"><option value="">any status</option>${["pending", "processing", "finalizing", "completed", "failed"].map(v => `<option>${v}</option>`).join("")}</select>
+      <button>Filter</button> <button type="button" name="clear">Clear</button></form>
     <table><thead><tr><th>Title</th><th>Status</th><th>Visibility</th><th>Version</th><th></th></tr></thead><tbody id="docs"></tbody></table>
     <div class="row muted" id="docs-more"></div>`;
   $("upload").onsubmit = async ev => {
@@ -328,54 +358,111 @@ async function documentsPane(pane, kb) {
       $("redact").reset(); $("redact").apply.disabled = true; listDocs(kb);
     } catch (e) { fail($("redact-out"), e); }
   };
-  $("add-url").site.onchange = ev => $("add-url").max_pages.classList.toggle("hidden", !ev.target.checked);
   $("add-url").onsubmit = async ev => {
     ev.preventDefault();
-    const f = ev.target;
-    try {
-      if (f.site.checked) await api(`/knowledge-bases/${kb.id}/sites`, {method: "POST", json: {url: f.url.value, ...(f.max_pages.value ? {max_pages: +f.max_pages.value} : {})}});
-      else await api(`/knowledge-bases/${kb.id}/knowledge/url`, {method: "POST", json: {url: f.url.value}});
-      f.reset(); f.max_pages.classList.add("hidden"); await listDocs(kb);
-    }
+    try { await api(`/knowledge-bases/${kb.id}/knowledge/url`, {method: "POST", json: {url: ev.target.url.value}}); ev.target.reset(); await listDocs(kb); }
     catch (e) { fail(pane, e); }
   };
+  // the filter (state.docFilter) survives tab switches within this KB; Sites → Pages sets site_id
+  const f = $("doc-filter"), flt = state.docFilter;
+  try {
+    const sites = (await api(`/knowledge-bases/${kb.id}/sites`)).data;
+    f.site_id.insertAdjacentHTML("beforeend", sites.map(x => `<option value="${esc(x.id)}">site: ${esc(x.title || x.url)}</option>`).join(""));
+  } catch (_) {}
+  f.field.value = flt.field || "keyword"; f.q.value = flt.q || ""; f.site_id.value = flt.site_id || ""; f.parse_status.value = flt.parse_status || "";
+  f.onsubmit = ev => {
+    ev.preventDefault();
+    state.docFilter = {field: f.field.value, q: f.q.value.trim(), site_id: f.site_id.value, parse_status: f.parse_status.value, page: 1};
+    listDocs(kb);
+  };
+  f.site_id.onchange = f.parse_status.onchange = () => f.requestSubmit();
+  f.clear.onclick = () => { f.reset(); f.requestSubmit(); };
   await listDocs(kb);
 }
 
+// --- sites: a whole site imported from one URL (docs/ingestion.md, Sites) -----------------------
+let siteFilter = {};
+async function sitesPane(pane, kb) {
+  pane.innerHTML = `
+    <form id="add-site" class="row"><input name="url" type="url" placeholder="https://… (import every page under this URL)" style="flex:1" required>
+      <input name="max_pages" type="number" min="1" max="5000" placeholder="max pages" title="at most this many pages (default 500)" style="width:8em">
+      <button class="primary" title="Refresh later picks up changed, new and removed pages">Add site</button></form>
+    <form id="site-filter" class="row">
+      <select name="field"><option value="keyword">title or URL</option><option value="title">title</option><option value="url">URL</option></select>
+      <input name="q" type="search" placeholder="Search sites" style="flex:1">
+      <select name="status"><option value="">any status</option>${["pending", "crawling", "completed", "failed"].map(v => `<option>${v}</option>`).join("")}</select>
+      <button>Filter</button> <button type="button" name="clear">Clear</button></form>
+    <div id="sites"></div>`;
+  $("add-site").onsubmit = async ev => {
+    ev.preventDefault();
+    const f = ev.target;
+    try { await api(`/knowledge-bases/${kb.id}/sites`, {method: "POST", json: {url: f.url.value, ...(f.max_pages.value ? {max_pages: +f.max_pages.value} : {})}}); f.reset(); await listSites(kb); }
+    catch (e) { fail(pane, e); }
+  };
+  const f = $("site-filter");
+  if (siteFilter.kb !== kb.id) siteFilter = {kb: kb.id};
+  f.field.value = siteFilter.field || "keyword"; f.q.value = siteFilter.q || ""; f.status.value = siteFilter.status || "";
+  f.onsubmit = ev => { ev.preventDefault(); siteFilter = {kb: kb.id, field: f.field.value, q: f.q.value.trim(), status: f.status.value}; listSites(kb); };
+  f.status.onchange = () => f.requestSubmit();
+  f.clear.onclick = () => { f.reset(); f.requestSubmit(); };
+  await listSites(kb);
+}
+
 async function listSites(kb) {
-  const sites = (await api(`/knowledge-bases/${kb.id}/sites`)).data;
+  const q = new URLSearchParams();
+  if (siteFilter.q) q.set(siteFilter.field || "keyword", siteFilter.q);
+  if (siteFilter.status) q.set("status", siteFilter.status);
+  const sites = (await api(`/knowledge-bases/${kb.id}/sites?${q}`)).data;
   const stats = s => { const t = s.stats || {}; return t.discovered === undefined ? "" :
     `last crawl: ${t.discovered} found, ${t.added} added, ${t.refreshed} checked for changes, ${t.removed} removed` +
     (t.skipped ? `, ${t.skipped} already in the KB` : "") + (t.unreachable ? `, ${t.unreachable} unreachable` : "") + (t.truncated ? " · stopped at max pages" : ""); };
-  $("sites").innerHTML = sites.length ? `<h3>Sites</h3><table><thead><tr><th>Site</th><th>Status</th><th>Pages</th><th></th></tr></thead><tbody>${sites.map(s => `<tr data-id="${esc(s.id)}">
+  $("sites").innerHTML = sites.length ? `${privateNote(kb)}<p class="muted">${plural(sites.length, "site")}</p><table><thead><tr><th>Site</th><th>Status</th><th>Pages</th><th title="The site's visibility; changing it changes all its pages">Visibility</th><th></th></tr></thead><tbody>${sites.map(s => `<tr data-id="${esc(s.id)}">
     <td>${link(s.title || s.url, s.url)}<div class="muted">${esc(stats(s))}${s.last_crawled_at ? ` · ${esc(new Date(s.last_crawled_at).toLocaleString())}` : ""}</div></td>
     <td><span class="badge ${esc(s.status)}">${esc(s.status)}</span>${s.error_message ? `<div class="error">${esc(s.error_message)}</div>` : ""}</td>
     <td>${s.pages}</td>
-    <td><button data-act="refresh" ${["pending", "crawling"].includes(s.status) ? "disabled" : ""} title="Crawl again: re-check every page, add new pages, delete removed ones">Refresh</button> <button data-act="del">Delete</button></td></tr>`).join("")}</tbody></table>` : "";
+    <td><select data-act="vis" ${kb.visibility === "private" ? `title="${esc(PRIVATE_KB)}"` : ""}>${visOptions(kb, s.visibility)}</select></td>
+    <td><button data-act="pages" title="This site's pages in the Documents tab">Pages</button> <button data-act="refresh" ${["pending", "crawling"].includes(s.status) ? "disabled" : ""} title="Crawl again: re-check every page, add new pages, delete removed ones">Refresh</button> <button data-act="del">Delete</button></td></tr>`).join("")}</tbody></table>`
+    : `<p class="muted">${siteFilter.q || siteFilter.status ? "No sites match." : "No sites yet."}</p>`;
   $("sites").querySelectorAll("tr[data-id]").forEach(tr => {
     const id = tr.dataset.id;
+    tr.querySelector('[data-act="pages"]').onclick = () => { state.docFilter = {site_id: id}; state.tab = "documents"; openKb(kb.id); };
+    tr.querySelector('[data-act="vis"]').onchange = async ev => {
+      const visibility = ev.target.value;
+      const groups = visibility === "groups" ? (prompt(`Groups (comma separated). Yours: ${groupsText(myGroups()) || "none"}`, myGroups().join(", ")) || "").split(",").map(s => s.trim()).filter(Boolean) : [];
+      if (!confirm(`Make this site and all its pages '${visibility}'?`)) return listSites(kb);
+      try { await api(`/sites/${id}`, {method: "PUT", json: {visibility, groups}}); } catch (e) { alert(e.message); }
+      listSites(kb);
+    };
     tr.querySelector('[data-act="refresh"]').onclick = async () => { try { await api(`/sites/${id}/refresh`, {method: "POST"}); } catch (e) { alert(e.message); } listSites(kb); };
     tr.querySelector('[data-act="del"]').onclick = async () => {
       if (!confirm("Delete this site?")) return;
       const pages = confirm("Also delete its pages from the knowledge base? (Cancel keeps them as separate documents)");
       try { await api(`/sites/${id}?delete_pages=${pages}`, {method: "DELETE"}); } catch (e) { alert(e.message); }
-      listDocs(kb);
+      listSites(kb);
     };
   });
 }
 
+const DOC_PAGE = 50;
 async function listDocs(kb) {
-  listSites(kb).catch(() => {});
-  const body = await api(`/knowledge-bases/${kb.id}/knowledge?page_size=100`);
+  const flt = state.docFilter, page = flt.page || 1;
+  const q = new URLSearchParams({page, page_size: DOC_PAGE});
+  if (flt.q) q.set(flt.field || "keyword", flt.q);
+  for (const k of ["site_id", "parse_status"]) if (flt[k]) q.set(k, flt[k]);
+  const body = await api(`/knowledge-bases/${kb.id}/knowledge?${q}`);
+  const filtered = flt.q || flt.site_id || flt.parse_status;
   $("docs").innerHTML = body.data.map(d => `<tr data-id="${esc(d.id)}">
     <td>${esc(d.title || d.file_name || d.source)}<div class="muted">${esc((d.citation || {}).text || d.file_name || d.source || d.type)}</div></td>
     <td><span class="badge ${esc(d.parse_status)}">${esc(d.parse_status)}</span>${d.enable_status !== "enabled" ? ' <span class="badge">disabled</span>' : ""}${d.superseded_by?.length ? ' <span class="badge">superseded</span>' : ""}${d.error_message ? `<div class="error">${esc(d.error_message)}</div>` : ""}</td>
-    <td><select data-act="vis">${["private", "groups", "all"].map(v => `<option ${v === d.visibility ? "selected" : ""}>${v}</option>`).join("")}</select></td>
+    <td><select data-act="vis" ${kb.visibility === "private" ? `title="${esc(PRIVATE_KB)}"` : ""}>${visOptions(kb, d.visibility)}</select></td>
     <td>${d.version}</td>
     <td><button data-act="chunks">Passages</button> <button data-act="redact">Redact</button> <button data-act="cite">Citation</button> <button data-act="reparse">Reparse</button> <button data-act="del">Delete</button></td></tr>
     <tr class="hidden" data-chunks="${esc(d.id)}"><td colspan="5"></td></tr>`).join("") ||
-    `<tr><td colspan="5" class="muted">No documents yet.</td></tr>`;
-  $("docs-more").textContent = body.total > body.data.length ? `${body.total} documents; showing ${body.data.length}.` : "";
+    `<tr><td colspan="5" class="muted">${filtered ? "No documents match." : "No documents yet."}</td></tr>`;
+  const pages = Math.max(1, Math.ceil(body.total / DOC_PAGE));
+  $("docs-more").innerHTML = `<span>${plural(body.total, "document")}${filtered ? " match" : ""}</span>` + (pages > 1 ?
+    ` <button data-p="${page - 1}" ${page <= 1 ? "disabled" : ""}>Previous</button><span>page ${page} of ${pages}</span><button data-p="${page + 1}" ${page >= pages ? "disabled" : ""}>Next</button>` : "");
+  $("docs-more").querySelectorAll("[data-p]").forEach(b => b.onclick = () => { state.docFilter = {...flt, page: +b.dataset.p}; listDocs(kb); });
   $("docs").querySelectorAll("tr[data-id]").forEach(tr => {
     const id = tr.dataset.id;
     tr.querySelector('[data-act="del"]').onclick = async () => { if (confirm("Delete this document? Its text, file, passages and the memory it fed are removed now.")) { await api(`/knowledge/${id}`, {method: "DELETE"}); listDocs(kb); } };
@@ -645,7 +732,7 @@ async function settingsPane(pane, kb) {
   pane.innerHTML = `<form id="kb-settings">
     <div class="row"><label>Name <input name="name" value="${esc(kb.name)}"></label></div>
     <div class="row"><label style="flex:1">Description <textarea name="description">${esc(kb.description)}</textarea></label></div>
-    <div class="row"><label>Visibility <select name="visibility">${["private", "groups", "all"].map(v => `<option ${v === kb.visibility ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+    <div class="row"><label>Visibility <select name="visibility">${["private", "groups", "all"].map(v => `<option value="${v}" ${v === kb.visibility ? "selected" : ""} ${v === "all" && !isAdmin() ? 'title="Only an admin shares with everyone: saving sends a request to the admins"' : ""}>${v}${v === "all" && !isAdmin() ? " (needs approval)" : ""}</option>`).join("")}</select></label>
       <label title="Yours: ${esc(groupsText(myGroups()) || "none")}">Groups <input name="groups" value="${esc(kb.groups.join(", "))}" placeholder="${esc(myGroups().join(", ") || "org:eic, role:shifter")}"></label></div>
     ${FEATURES.wiki && kb.type === "document" ? `<h3>LLM wiki</h3><div class="row"><label><input type="checkbox" name="wiki" ${wikiOn(kb) ? "checked" : ""}> build a wiki from this knowledge base's documents</label>
       <label>Granularity <select name="granularity">${["focused", "standard", "exhaustive"].map(g => `<option ${(kb.wiki_config || {}).extraction_granularity === g ? "selected" : ""}>${g}</option>`).join("")}</select></label></div>` : ""}
@@ -654,7 +741,10 @@ async function settingsPane(pane, kb) {
     ${kb.type === "records" ? `<h3>Records</h3><div class="row"><label>Default type <input name="default_type" value="${esc((kb.records_config || {}).default_type || "")}" placeholder="experiment_run"></label>
       <label><input type="checkbox" name="strict" ${(kb.records_config || {}).strict !== false ? "checked" : ""}> strict (reject undeclared fields)</label>
       <label><input type="checkbox" name="keep_versions" ${(kb.records_config || {}).keep_versions !== false ? "checked" : ""}> keep versions</label></div>` : ""}
-    <div class="row"><button class="primary">Save</button> <button type="button" id="del-kb">Delete knowledge base</button></div></form>`;
+    ${isAdmin() ? "" : `<p class="muted">You share directly with groups you are in. Sharing with everyone ('all'), or with a group you are not in, sends a request: an admin, or that group's admins, approve it (📨 Sharing requests).</p>`}
+    <div id="kb-share-status"></div>
+    <div class="row"><button class="primary">Save</button> <button type="button" id="del-kb">Delete knowledge base</button><span id="kb-save-msg"></span></div></form>`;
+  if (MODE === "authsvc") showKbShareStatus(kb);
   $("kb-settings").onsubmit = async ev => {
     ev.preventDefault();
     const f = ev.target;
@@ -665,11 +755,32 @@ async function settingsPane(pane, kb) {
       if (f.memory) body.memory_config = {enabled: f.memory.checked, group_id: f.memory_group.value || "default"};
       if (f.default_type) body.records_config = {...(kb.records_config || {}), default_type: f.default_type.value || null,
         strict: f.strict.checked, keep_versions: f.keep_versions.checked};
-      await api(`/knowledge-bases/${kb.id}`, {method: "PUT", json: body});
+      const reshare = (body.visibility !== kb.visibility || body.groups.join() !== (kb.groups || []).join());
+      // wider than the owner may share: a request instead, and the rest of the settings saved as they are
+      const needsRequest = reshare && !isAdmin() && (body.visibility === "all" ||
+        (body.visibility === "groups" && body.groups.some(g => !myGroups().includes(g))));
+      if (needsRequest) {
+        const who = body.visibility === "all" ? "an admin" : "the admins of those groups (or an admin)";
+        const note = prompt(`Sharing this knowledge base ${body.visibility === "all" ? "with everyone" : "with " + groupsText(body.groups)} needs approval by ${who}. Send a request? Add a note for them (optional):`, "");
+        if (note === null) return;
+        await api(`/knowledge-bases/${kb.id}/share-requests`, {method: "POST", json: {visibility: body.visibility, groups: body.groups, apply_to_items: true, note}});
+        delete body.visibility; delete body.groups;
+        await api(`/knowledge-bases/${kb.id}`, {method: "PUT", json: body});
+        alert("Request sent. The knowledge base and its documents are shared once it is approved; follow it under 📨 Sharing requests.");
+        state.kb = null; await loadKbs(kb.id); countShares();
+        return;
+      }
+      if (reshare && confirm(`Also give every document and site in this knowledge base the new visibility ('${body.visibility}')? Documents added while it was private are private; without this they stay so.`))
+        body.apply_to_items = true;
+      const saved = (await api(`/knowledge-bases/${kb.id}`, {method: "PUT", json: body})).data;
+      if (saved.applied_to_items) alert(`Shared: ${saved.applied_to_items.documents} documents and ${saved.applied_to_items.sites} sites are now '${saved.applied_to_items.visibility}'.`);
       if (f.wiki && f.wiki.checked && !wikiOn(kb) && confirm("Build the wiki from the existing documents now?"))
         await api(`/knowledgebase/${kb.id}/wiki/rebuild`, {method: "POST"});
       state.kb = null; await loadKbs(kb.id);
-    } catch (e) { fail(pane, e); }
+    } catch (e) {
+      const msg = $("kb-save-msg");   // next to Save, where it is seen
+      if (msg) { msg.className = "error"; msg.textContent = " " + (e.message || e); } else fail(pane, e);
+    }
   };
   $("del-kb").onclick = async () => {
     if (!confirm(`Delete "${kb.name}" and everything in it?`)) return;
@@ -1147,6 +1258,69 @@ function presetOptions(kb) {
     .filter(([, , on]) => on).map(([v, label]) => `<option value="${v}"${v === def ? " selected" : ""}>${label}</option>`).join("");
 }
 
+// --- sharing requests: wider sharing than an owner may do (docs/data-model.md, Sharing requests) ---
+const shareTarget = r => r.visibility === "all" ? "everyone" : groupsText(r.groups);
+const shareWhen = t => t ? new Date(t).toLocaleString() : "";
+
+// The badge on the sidebar link: how many requests wait for you
+async function countShares() {
+  if (!(state.me && state.me.approves_shares)) return;
+  try {
+    const n = (await api("/share-requests?scope=approve")).data.length;
+    $("shares-count").textContent = String(n); $("shares-count").classList.toggle("hidden", !n);
+  } catch (_) {}
+}
+
+// A KB's pending request, in its settings
+async function showKbShareStatus(kb) {
+  const box = $("kb-share-status");
+  if (!box || !(state.me && kb.owner_subject === state.me.subject)) return;
+  try {
+    const pending = (await api("/share-requests?scope=mine&status=pending")).data.filter(r => r.knowledge_base_id === kb.id);
+    box.innerHTML = pending.map(r => `<p class="muted">⏳ Waiting for approval: share with <b>${esc(shareTarget(r))}</b> (asked ${esc(shareWhen(r.created_at))}).
+      <button type="button" data-cancel="${esc(r.id)}">Cancel request</button></p>`).join("");
+    box.querySelectorAll("[data-cancel]").forEach(b => b.onclick = async () => {
+      try { await api(`/share-requests/${b.dataset.cancel}`, {method: "DELETE"}); } catch (e) { alert(e.message); }
+      showKbShareStatus(kb);
+    });
+  } catch (_) {}
+}
+
+async function openShares() {
+  const pane = openPage("shares-link", "Sharing requests", "Owners share a knowledge base directly with groups they are in. Sharing with everyone, or with a group they are not in, is a request: an admin approves sharing with everyone; a group's admins (or an admin) approve sharing with their group. Approving shares the knowledge base and, when asked, its documents and sites.", "shares");
+  pane.innerHTML = '<p class="muted">Loading…</p>';
+  const row = (r, actions) => `<tr data-id="${esc(r.id)}"><td><b>${esc(r.knowledge_base_name || r.knowledge_base_id)}</b><div class="muted">${esc(r.knowledge_base_ref || "")}</div></td>
+    <td>${esc(shareTarget(r))}${r.apply_to_items ? '<div class="muted">with its documents and sites</div>' : ""}</td>
+    <td>${esc(r.note || "")}${r.decision_note ? `<div class="muted">reply: ${esc(r.decision_note)}</div>` : ""}</td>
+    <td><span class="badge ${r.status === "approved" ? "completed" : r.status === "declined" ? "failed" : r.status === "pending" ? "processing" : ""}">${esc(r.status)}</span>
+      <div class="muted">${esc(shareWhen(r.decided_at || r.created_at))}</div></td><td>${actions}</td></tr>`;
+  const table = (head, rows, empty) => rows.length ? `<table><thead><tr>${head.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`
+    : `<p class="muted">${esc(empty)}</p>`;
+  try {
+    const approves = state.me && state.me.approves_shares;
+    const [todo, mine] = await Promise.all([approves ? api("/share-requests?scope=approve").then(b => b.data) : [],
+                                            api("/share-requests?scope=mine").then(b => b.data)]);
+    pane.innerHTML = (approves ? `<h3>Waiting for you</h3>` + table(["Knowledge base", "Share with", "Note", "Status", ""],
+        todo.map(r => row(r, `<span class="muted">by ${esc(shortOwner(r.requester))}</span> <button class="primary" data-act="approve">Approve</button> <button data-act="decline">Decline</button>`)),
+        "Nothing waits for your approval.") : "") +
+      `<h3>Your requests</h3>` + table(["Knowledge base", "Share with", "Note", "Status", ""],
+        mine.map(r => row(r, r.status === "pending" ? '<button data-act="cancel">Cancel</button>' : "")), "You have not asked to share a knowledge base.");
+    pane.querySelectorAll("tr[data-id]").forEach(tr => tr.querySelectorAll("[data-act]").forEach(b => b.onclick = async () => {
+      const id = tr.dataset.id, act = b.dataset.act;
+      try {
+        if (act === "cancel") await api(`/share-requests/${id}`, {method: "DELETE"});
+        else {
+          const note = prompt(act === "approve" ? "Approve: a note for the owner (optional)" : "Decline: tell the owner why (optional)", "");
+          if (note === null) return;
+          const r = (await api(`/share-requests/${id}/${act}`, {method: "POST", json: {note}})).data;
+          if (r.applied_to_items) alert(`Shared, with ${r.applied_to_items.documents} documents and ${r.applied_to_items.sites} sites.`);
+        }
+      } catch (e) { alert(e.message); }
+      countShares(); loadKbs(); openShares();
+    }));
+  } catch (e) { pane.innerHTML = ""; fail(pane, e); }
+}
+
 // The agentic search's model, presets and tools (admins; GET /agentic-search/tools).
 async function openTools() {
   const pane = openPage("tools-link", "Agent tools", "What agentic search can use. The tools are built into the knowledge service; a preset offers the tools of its groups, and a [features] switch (wiki, memory, web, records) takes its tools away. Tools that change things are only offered when a request allows writes.", "tools");
@@ -1329,7 +1503,7 @@ async function memorySearch(pane) {
   };
 }
 
-const PANES = {documents: documentsPane, search: searchPane, agentic: agenticPane, tags: tagsPane, faq: faqPane,
+const PANES = {documents: documentsPane, sites: sitesPane, search: searchPane, agentic: agenticPane, tags: tagsPane, faq: faqPane,
                freshness: freshnessPane, settings: settingsPane, records: recordsPane, query: queryPane,
                types: typesPane, wiki: wikiPane};
 
@@ -1344,15 +1518,19 @@ $("new-kb").onsubmit = async ev => {
   catch (e) { fail($("kbs"), e); }
 };
 
-// status changes arrive on the event stream; refresh the document list when one is shown
+// status changes arrive on the event stream; refresh the document or site list when one is shown
 function listen() {
   if (!window.EventSource) return;
   const source = new EventSource(API + "/events");
   let timer = null;
   source.onmessage = ev => {
-    try { const e = JSON.parse(ev.data); if (!state.kb || e.knowledge_base_id !== state.kb.id || state.tab !== "documents") return; } catch (_) { return; }
+    try { const e = JSON.parse(ev.data); if (!state.kb || e.knowledge_base_id !== state.kb.id || !["documents", "sites"].includes(state.tab)) return; } catch (_) { return; }
     // not while a passage is being edited (re-rendering would drop the edit)
-    clearTimeout(timer); timer = setTimeout(() => state.kb && !document.querySelector("#docs textarea") && listDocs(state.kb).catch(() => {}), 400);
+    clearTimeout(timer); timer = setTimeout(() => {
+      if (!state.kb) return;
+      if (state.tab === "sites" && $("sites")) listSites(state.kb).catch(() => {});
+      else if (state.tab === "documents" && $("docs") && !document.querySelector("#docs textarea")) listDocs(state.kb).catch(() => {});
+    }, 400);
   };
 }
 
