@@ -62,6 +62,10 @@ class KBThread:
         return {
             "subject": ctx.subject,
             "user_id": ctx.user_id,
+            # who it is, when authsvc looked it up (agenticwf-auth with the profile fields)
+            "username": getattr(ctx, "username", None),
+            "name": getattr(ctx, "name", None),
+            "email": getattr(ctx, "email", None),
             "client_id": ctx.client_id,
             "organization_id": ctx.organization_id,
             "roles": sorted(ctx.roles),

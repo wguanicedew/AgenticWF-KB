@@ -13,11 +13,26 @@ agenticwf-auth-client.
 
 from __future__ import annotations
 
+import ssl
 from typing import Any, Callable
 
+import certifi
 import httpx
 
 __all__ = ["KBClient", "KBClientError"]
+
+
+def _trust() -> ssl.SSLContext:
+    """The system's CAs (SSL_CERT_FILE / SSL_CERT_DIR honoured) and certifi's, as httpx alone trusts
+    only certifi's; with agenticwf-auth-client, also CERN's and AGENTICWF_CA_BUNDLE (its tls.py), so
+    a CERN host works where the system lacks its CA. Added to the system's, never instead."""
+    try:
+        from agenticwf_auth_cli import ssl_context
+    except ImportError:
+        context = ssl.create_default_context()
+        context.load_verify_locations(certifi.where())
+        return context
+    return ssl_context()
 
 
 class KBClientError(Exception):
@@ -35,7 +50,7 @@ class KBClient:
         token = bearer or api_key
         self._auth = {"Authorization": f"Bearer {token}"} if token else {}
         self._headers = headers
-        self._http = http or httpx.Client(timeout=timeout)
+        self._http = http or httpx.Client(timeout=timeout, verify=_trust())
 
     @classmethod
     def from_env(cls, url: str | None = None, token: str | None = None, **options) -> "KBClient":
