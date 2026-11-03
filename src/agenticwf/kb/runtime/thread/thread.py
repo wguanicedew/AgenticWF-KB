@@ -77,6 +77,8 @@ class KBThread:
             "personal_knowledge_base_id": await self.services.knowledge_bases.ensure_personal(ctx),
             # whose sharing requests they decide: an admin's all, a group admin's for their groups
             "approves_shares": is_admin(ctx) or bool(managed_groups(ctx)),
+            # the groups they administer (`org:<id>`): they create those groups' KBs
+            "managed_groups": sorted(managed_groups(ctx)),
         }
 
     async def system_info(self) -> dict:

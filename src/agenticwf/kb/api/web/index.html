@@ -92,6 +92,9 @@ pre.json{white-space:pre-wrap;font:12px ui-monospace,Menlo,monospace;background:
     <h3>New knowledge base</h3>
     <form id="new-kb">
       <div class="row"><input name="name" placeholder="Name" required style="flex:1"></div>
+      <label class="row muted hidden" id="new-kb-owner-row" title="A group's knowledge base is named <group>:<name>; the group's admins manage it, its members read it and add to it">
+        owner <select name="owner" id="new-kb-owner"><option value="">me</option></select>
+      </label>
       <div class="row">
         <select name="type" id="new-kb-type"><option value="document">documents</option><option value="faq">FAQ</option></select>
         <button class="primary">Create</button>
@@ -155,6 +158,13 @@ async function loadMe() {
   try {
     const me = state.me = (await api("/me")).data;
     $("who").textContent = `${me.subject} · ${MODE}`;
+    // Owner of a new KB: me, or a group I administer (an admin: any of my groups)
+    const names = me.group_names || {};
+    const owned = Object.keys(names).filter(g => (me.scopes || []).includes("admin") || (me.managed_groups || []).includes(g));
+    $("new-kb-owner").innerHTML = '<option value="">me</option>' + owned.map(g =>
+      `<option value="${esc(g)}">group ${esc(names[g])}</option>`).join("");
+    $("new-kb-owner-row").classList.toggle("hidden", !owned.length);
+    $("new-kb-owner").onchange = () => $("new-kb-memory").classList.toggle("hidden", !FEATURES.memory || !!$("new-kb-owner").value);
     if (MODE !== "standalone") {
       $("my-groups").textContent = myGroups().length ? `Your groups: ${groupsText(myGroups())}` : "You are in no groups yet.";
       if (MODE === "authsvc") $("my-groups").insertAdjacentHTML("beforeend", ` <a href="${esc(AUTH)}/admin#groups">Groups…</a>`);
@@ -1510,9 +1520,10 @@ const PANES = {documents: documentsPane, sites: sitesPane, search: searchPane, a
 $("new-kb").onsubmit = async ev => {
   ev.preventDefault();
   const f = ev.target, body = {name: f.name.value, type: f.type.value};
+  if (f.owner.value) body.group = f.owner.value;          // a group's KB feeds no one's memory
   if (body.type === "document") {
     if (FEATURES.wiki) body.indexing_strategy = {wiki_enabled: f.wiki.checked};
-    if (FEATURES.memory) body.memory_config = {enabled: f.memory.checked};
+    if (FEATURES.memory && !body.group) body.memory_config = {enabled: f.memory.checked};
   }
   try { const kb = (await api("/knowledge-bases", {method: "POST", json: body})).data; f.reset(); await loadKbs(kb.id); }
   catch (e) { fail($("kbs"), e); }

@@ -2,9 +2,13 @@
 KnowledgeBaseService: create, list, read, change and delete knowledge bases
 (docs/data-model.md, Ownership and visibility; docs/api.md, Knowledge bases).
 
-A KB is addressed by id or by `<owner>:<slug>` (e.g. `local:wguan:personal`, `system:eic-docs`);
-the slug is the part after the last colon. Every user has a private `personal` KB, created on
-their first request. A KB the principal cannot see is "not found".
+A KB is addressed by id or by `<owner>:<slug>`; the slug is the part after the last colon. Its
+`ref` names the owner by username (`alice:hpo-history`; the email for an account with no username:
+`alice@example.org:personal`), a group's KB by the group's name (`aid2e:dtlz2`, owner
+`org:<organization id>`: created with `group`, managed by the group's admins, read and added to
+by its members), else by subject (`system:eic-docs`, `local:wguan:personal`); a ref with the
+owner's subject still resolves. Every user has a private `personal` KB, created on their
+first request. A KB the principal cannot see is "not found".
 """
 
 from __future__ import annotations
@@ -31,13 +35,15 @@ UPDATABLE = ("name", "description", "chunking_config", "indexing_strategy", "ret
 def document_defaults(owner: str) -> dict:
     """A new document KB's wiki and memory switches, from `[knowledge_bases]`; a system KB feeds
     no one's memory."""
+    personal = owner != access.SYSTEM_OWNER and not owner.startswith(access.GROUP_OWNER)
     return {"indexing_strategy": {**default_indexing_strategy(), "wiki_enabled": features.kb_default("wiki_enabled")},
-            "memory_config": {"enabled": features.kb_default("memory_enabled") and owner != access.SYSTEM_OWNER}}
+            "memory_config": {"enabled": features.kb_default("memory_enabled") and personal}}
 
 
 def kb_dict(kb: KnowledgeBase, knowledge_count: int | None = None) -> dict:
-    data = {"id": kb.id, "slug": kb.slug, "ref": f"{kb.owner_subject}:{kb.slug}", "name": kb.name,
+    data = {"id": kb.id, "slug": kb.slug, "ref": f"{kb.owner_name or kb.owner_subject}:{kb.slug}", "name": kb.name,
             "description": kb.description, "type": kb.type, "owner_subject": kb.owner_subject,
+            "owner_name": kb.owner_name,
             "visibility": kb.visibility, "groups": list(kb.groups or []),
             "default_item_visibility": kb.default_item_visibility, "contribute": kb.contribute,
             "chunking_config": kb.chunking_config, "indexing_strategy": kb.indexing_strategy,
@@ -55,6 +61,38 @@ def kb_dict(kb: KnowledgeBase, knowledge_count: int | None = None) -> dict:
     if knowledge_count is not None:
         data["knowledge_count"] = knowledge_count
     return data
+
+
+def owner_name(ctx: AuthContext) -> str | None:
+    """What a principal's KB refs name them by: their username (authsvc gives the email when the
+    account has none); None for machines and principals without one (local users)."""
+    return None if ctx.is_machine else (getattr(ctx, "username", None) or None)
+
+
+def find_group(ctx: AuthContext, wanted: str) -> tuple[str, str]:
+    """(organization id, name) of one of the caller's groups, given its id, `org:<id>`, name or
+    the slug of its name (case-insensitive), else NotFound."""
+    wanted = wanted.strip()
+    bare = wanted[len(access.GROUP_OWNER):] if wanted.startswith(access.GROUP_OWNER) else wanted
+    groups = getattr(ctx, "organizations", None) or {}
+    if bare in groups:
+        return bare, groups[bare]
+    found = [(org_id, name) for org_id, name in groups.items()
+             if name.lower() == wanted.lower() or slugify(name) == slugify(wanted)]
+    if len(found) != 1:
+        raise NotFound(f"you are not in a group {wanted!r}" if not found else
+                       f"several of your groups are called {wanted!r}: give the group id")
+    return found[0]
+
+
+def group_share(ctx: AuthContext, owner: str, visibility: str, groups) -> list[str]:
+    """The groups a group-owned KB is shared with: always its own group (how its members see it),
+    so it is never private."""
+    if visibility == "private":
+        raise Invalid("a group's knowledge base is shared with the group: visibility groups or all")
+    if visibility != "groups":
+        return access.check_share(ctx, visibility, groups)
+    return access.check_share(ctx, visibility, [*groups, owner])
 
 
 def split_ref(ref: str) -> tuple[str | None, str]:
@@ -83,17 +121,26 @@ class KnowledgeBaseService:
     # -- lookups -------------------------------------------------------------------------------------
     @staticmethod
     async def load(session, ctx: AuthContext, ref: str, for_update: bool = False) -> KnowledgeBase:
-        """The KB `ref` (id or `<owner>:<slug>`) if the principal can see it, else NotFound."""
+        """The KB `ref` (id or `<owner>:<slug>`, the owner by username, group name or subject) if
+        the principal can see it, else NotFound."""
         owner, slug = split_ref(ref)
         query = sa.select(KnowledgeBase).where(KnowledgeBase.deleted_at.is_(None))
         if owner is None:
             query = query.where(KnowledgeBase.id == slug)
         else:
-            query = query.where(KnowledgeBase.owner_subject == owner, KnowledgeBase.slug == slug)
+            # The caller's own username names their KBs even before owner_name is filled in.
+            mine = (KnowledgeBase.owner_subject == ctx.subject) if owner == owner_name(ctx) else sa.false()
+            query = query.where(KnowledgeBase.slug == slug, sa.or_(
+                KnowledgeBase.owner_subject == owner, KnowledgeBase.owner_name == owner, mine))
         if for_update:
             query = query.with_for_update()
-        kb = (await session.execute(query)).scalar_one_or_none()
-        if kb is None or not access.can_see(ctx, kb):
+        groups = getattr(ctx, "organizations", None) or {}
+        # When a name is shared (a user `aid2e` and a group AID2E), the first visible one wins: the
+        # owner's subject, then the caller's own KB, then one of the caller's groups.
+        rows = sorted((await session.execute(query)).scalars().all(), key=lambda kb: (
+            kb.owner_subject != owner, kb.owner_subject != ctx.subject, access.owner_group(kb) not in groups))
+        kb = next((kb for kb in rows if access.can_see(ctx, kb)), None)
+        if kb is None:
             raise NotFound("knowledge base not found")
         return kb
 
@@ -111,16 +158,28 @@ class KnowledgeBaseService:
         return list((await session.execute(query)).scalars())
 
     async def ensure_personal(self, ctx: AuthContext) -> str | None:
-        """The principal's personal KB id, created on first use (not for machine clients)."""
+        """The principal's personal KB id, created on first use (not for machine clients). Also
+        keeps the owner names of their KBs and their groups' KBs current (a username set, a group
+        renamed since)."""
         if ctx.is_machine:
             return None
+        name = owner_name(ctx)
+        renames = {ctx.subject: name} if name else {}
+        renames.update({f"{access.GROUP_OWNER}{org_id}": slugify(org_name)
+                        for org_id, org_name in (getattr(ctx, "organizations", None) or {}).items()})
         async with async_session_scope() as session:
+            for owner, new_name in renames.items():
+                await session.execute(sa.update(KnowledgeBase).where(
+                    KnowledgeBase.owner_subject == owner,
+                    KnowledgeBase.owner_name.is_distinct_from(new_name)).values(
+                    owner_name=new_name, updated_at=KnowledgeBase.updated_at))   # a rename is not a change of content
             kb = (await session.execute(sa.select(KnowledgeBase).where(
                 KnowledgeBase.owner_subject == ctx.subject, KnowledgeBase.slug == PERSONAL,
                 KnowledgeBase.deleted_at.is_(None)))).scalar_one_or_none()
             if kb is not None:
                 return kb.id
-            kb = KnowledgeBase(owner_subject=ctx.subject, owner_org=ctx.organization_id, visibility="private",
+            kb = KnowledgeBase(owner_subject=ctx.subject, owner_name=name, owner_org=ctx.organization_id,
+                               visibility="private",
                                default_item_visibility="private", slug=PERSONAL, name="Personal",
                                description="Your private knowledge base",
                                embedding_model_id=await self.models.default_id("Embedding"),
@@ -184,17 +243,29 @@ class KnowledgeBaseService:
             raise Invalid(f"type must be one of {', '.join(KB_TYPES)} in this version")
         if kb_type != "document" and not features.enabled(kb_type):
             raise Invalid(f"{kb_type} knowledge bases are switched off in this deployment ([features] {kb_type})")
-        visibility = body.get("visibility") or "private"
-        groups = access.check_share(ctx, visibility, body.get("groups") or [])
+        if body.get("group"):
+            # A group's KB (`<group>:<slug>`): its admins manage it, its members read and add to it.
+            if body.get("system"):
+                raise Invalid("a knowledge base belongs to the system or to a group, not both")
+            org_id, org_name = find_group(ctx, str(body["group"]))
+            if not access.is_admin(ctx) and org_id not in (getattr(ctx, "managed_organizations", None) or ()):
+                raise Forbidden("only an admin of the group creates its knowledge bases")
+            owner, name_of_owner = f"{access.GROUP_OWNER}{org_id}", slugify(org_name)
+            visibility = body.get("visibility") or "groups"
+            groups = group_share(ctx, owner, visibility, body.get("groups") or [])
+        else:
+            owner = access.SYSTEM_OWNER if body.get("system") else ctx.subject
+            if owner == access.SYSTEM_OWNER and not access.is_admin(ctx):
+                raise Forbidden("only an admin creates system knowledge bases")
+            name_of_owner = None if owner == access.SYSTEM_OWNER else owner_name(ctx)
+            visibility = body.get("visibility") or "private"
+            groups = access.check_share(ctx, visibility, body.get("groups") or [])
         if visibility == "all" and not access.is_admin(ctx):
             raise Forbidden("only an admin shares a knowledge base with everyone")
-        owner = access.SYSTEM_OWNER if body.get("system") else ctx.subject
-        if owner == access.SYSTEM_OWNER and not access.is_admin(ctx):
-            raise Forbidden("only an admin creates system knowledge bases")
         item_visibility = body.get("default_item_visibility") or ("private" if visibility == "private" else "all")
         if item_visibility not in access.VISIBILITIES:
             raise Invalid("default_item_visibility must be private, groups or all")
-        contribute = body.get("contribute") or "owner"
+        contribute = body.get("contribute") or ("readers" if owner.startswith(access.GROUP_OWNER) else "owner")
         if contribute not in ("owner", "readers"):
             raise Invalid("contribute must be owner or readers")
         models = await self._check_models(ctx, body)
@@ -215,11 +286,13 @@ class KnowledgeBaseService:
                 KnowledgeBase.owner_subject == owner, KnowledgeBase.deleted_at.is_(None),
                 KnowledgeBase.slug.like(f"{slug}%")))).scalars())
             if body.get("slug") and slug in taken:
-                raise Conflict(f"you already have a knowledge base {slug!r}")
+                raise Conflict(f"{'you already have' if owner == ctx.subject else 'it already has'} "
+                               f"a knowledge base {slug!r}")
             base, n = slug, 2
             while slug in taken:
                 slug, n = f"{base}-{n}", n + 1
-            kb = KnowledgeBase(owner_subject=owner, owner_org=ctx.organization_id, visibility=visibility, groups=groups,
+            kb = KnowledgeBase(owner_subject=owner, owner_name=name_of_owner,
+                               owner_org=ctx.organization_id, visibility=visibility, groups=groups,
                                default_item_visibility=item_visibility, contribute=contribute, slug=slug, name=name,
                                description=body.get("description") or "", type=kb_type,
                                chunking_config={**default_chunking_config(), **(body.get("chunking_config") or {})},
@@ -263,7 +336,10 @@ class KnowledgeBaseService:
                 visibility = body.get("visibility") or kb.visibility
                 if visibility == "all" and not access.is_admin(ctx):
                     raise Forbidden("only an admin shares a knowledge base with everyone: send a sharing request")
-                kb.groups = access.check_share(ctx, visibility, body.get("groups", kb.groups) or [])
+                if access.owner_group(kb):
+                    kb.groups = group_share(ctx, kb.owner_subject, visibility, body.get("groups", kb.groups) or [])
+                else:
+                    kb.groups = access.check_share(ctx, visibility, body.get("groups", kb.groups) or [])
                 kb.visibility = visibility
             for field, allowed in (("default_item_visibility", access.VISIBILITIES), ("contribute", ("owner", "readers"))):
                 if body.get(field):

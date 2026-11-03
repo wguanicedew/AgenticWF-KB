@@ -1,6 +1,8 @@
 """agenticwf kb — the knowledge service from the command line.
 
     agenticwf kb list                                your knowledge bases
+    agenticwf kb create my-kb                        a new KB of yours: <username>:my-kb
+    agenticwf kb create dtlz2 --group AID2E          a group's KB (you administer it): aid2e:dtlz2
     agenticwf kb search "beam energy" [--kb ID]      hybrid search, best passages first
     agenticwf kb ask "what changed in run 42?"       agentic search: an answer and its sources
     agenticwf kb call GET /knowledge-bases           any KB API call (the path under /api/v1)
@@ -37,6 +39,12 @@ def _list(kb: KBClient, args) -> list:
     return kb.knowledge_bases()
 
 
+def _create(kb: KBClient, args) -> dict:
+    body = {k: v for k, v in (("slug", args.slug), ("description", args.description), ("type", args.type),
+                              ("visibility", args.visibility)) if v}
+    return kb.create_knowledge_base(args.name, group=args.group, **body)
+
+
 def _search(kb: KBClient, args) -> list:
     options = {"top_k": args.top_k} if args.top_k else {}
     return kb.search(args.query, args.kb_ids, **options)
@@ -53,7 +61,7 @@ def _call(kb: KBClient, args):
     return kb.request(args.method.upper(), args.path, json=json.loads(args.data) if args.data else None)
 
 
-COMMANDS = {"list": _list, "search": _search, "ask": _ask, "call": _call}
+COMMANDS = {"list": _list, "create": _create, "search": _search, "ask": _ask, "call": _call}
 
 
 def _one_line(text: str, width: int = 300) -> str:
@@ -65,6 +73,8 @@ def _show(command: str, data) -> None:
     if command == "list":
         for item in data:
             print(f"{item['id']}  {item.get('name', '')}  ({item.get('type', '')}, {item.get('ref', '')})")
+    elif command == "create":
+        print(f"{data['ref']}  (id {data['id']}, {data.get('type', '')}, {data.get('visibility', '')})")
     elif command == "search":
         for n, item in enumerate(data, start=1):
             print(f"[{n}] {item.get('score', 0):.3f}  {item.get('knowledge_title') or ''}  "
@@ -111,6 +121,14 @@ def register(sub) -> None:
     parser.set_defaults(run=run)
     commands = parser.add_subparsers(dest="kb_command", required=True)
     commands.add_parser("list", parents=[common], help="your knowledge bases")
+    create = commands.add_parser("create", parents=[common], help="a new knowledge base")
+    create.add_argument("name", help="its name; the ref's part after the colon is made from it (or --slug)")
+    create.add_argument("--group", help="a group you administer (its name or id): the KB is the group's")
+    create.add_argument("--slug", help="the ref's part after the colon (default: from the name)")
+    create.add_argument("--description")
+    create.add_argument("--type", choices=("document", "faq", "records"), help="default: document")
+    create.add_argument("--visibility", choices=("private", "groups", "all"),
+                        help="default: private (a group's KB: groups, shared with the group)")
     search = commands.add_parser("search", parents=[common, scope], help="hybrid search")
     search.add_argument("query")
     search.add_argument("--top-k", type=int, help="how many passages (default: the KB's setting)")

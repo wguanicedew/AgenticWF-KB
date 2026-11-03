@@ -27,6 +27,7 @@ GROUP_PREFIXES = ("org:", "role:", "idp:", "kb:")
 VISIBILITIES = ("private", "groups", "all")
 SCOPE_ADMIN = "admin"
 SYSTEM_OWNER = "system"
+GROUP_OWNER = "org:"          # owner_subject of a KB a group owns: org:<organization id>
 
 
 def normalise_group(name: str) -> str:
@@ -101,9 +102,24 @@ def can_read_item(ctx: AuthContext, item) -> bool:
     return item.visibility == "groups" and bool(set(item.groups or ()) & set(principal_groups(ctx)))
 
 
+def owner_group(row) -> str | None:
+    """The organization id of a group-owned KB (`owner_subject = org:<id>`), else None."""
+    owner = row.owner_subject or ""
+    return owner[len(GROUP_OWNER):] if owner.startswith(GROUP_OWNER) else None
+
+
+def is_owner(ctx: AuthContext, row) -> bool:
+    """The owner of a row: its user, or for a group-owned KB an admin of that group. (The group's
+    members see it through its groups, which always hold `org:<id>`.)"""
+    if row.owner_subject == ctx.subject:
+        return True
+    group = owner_group(row)
+    return group is not None and group in (getattr(ctx, "managed_organizations", None) or ())
+
+
 def can_manage(ctx: AuthContext, row) -> bool:
-    """Change a KB's or model's settings, delete it: the owner or an admin."""
-    return is_admin(ctx) or row.owner_subject == ctx.subject
+    """Change a KB's or model's settings, delete it: the owner (a group's admins) or an admin."""
+    return is_admin(ctx) or is_owner(ctx, row)
 
 
 def can_contribute(ctx: AuthContext, kb) -> bool:
@@ -113,7 +129,7 @@ def can_contribute(ctx: AuthContext, kb) -> bool:
 
 def can_manage_item(ctx: AuthContext, item, kb) -> bool:
     """Edit, replace, delete an item or change its visibility: its owner, the KB owner, an admin."""
-    return is_admin(ctx) or item.owner_subject == ctx.subject or kb.owner_subject == ctx.subject
+    return is_admin(ctx) or item.owner_subject == ctx.subject or is_owner(ctx, kb)
 
 
 def check_share(ctx: AuthContext, visibility: str, groups: Iterable[str]) -> list[str]:

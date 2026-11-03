@@ -95,6 +95,15 @@ class KBClient:
     def knowledge_bases(self) -> list[dict]:
         return self.request("GET", "/knowledge-bases?page_size=100")
 
+    def create_knowledge_base(self, name: str, group: str | None = None, **body) -> dict:
+        """A new KB, yours (`<username>:<slug>`) or, with `group` (a group you administer: its name
+        or id), the group's (`<group>:<slug>`). `body`: slug, description, type, visibility, groups,
+        contribute, ... (the API's fields)."""
+        payload = {"name": name, **body}
+        if group:
+            payload["group"] = group
+        return self.request("POST", "/knowledge-bases", json=payload)
+
     def search(self, query: str, knowledge_base_ids: list[str] | None = None, **options) -> list[dict]:
         return self.request("POST", "/knowledge-search", json={"query": query,
                                                                "knowledge_base_ids": knowledge_base_ids, **options})

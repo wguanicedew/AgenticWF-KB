@@ -82,6 +82,50 @@ def test_system_model_and_user_models(alice, bob):
 
 
 # --- knowledge bases --------------------------------------------------------------------------
+def test_kb_refs_name_the_owner_by_username(client):
+    """The ref is `<username>:<slug>`; the owner's subject still resolves, and a username set later
+    (an account that had only its email) renames the refs of all their KBs."""
+    erin = Caller(client, user("u7x2", RW, username="erin@example.org"))
+    kb = erin.post("/kb/api/v1/knowledge-bases", json={"name": "Notes"}).json()["data"]
+    assert kb["ref"] == "erin@example.org:notes" and kb["owner_name"] == "erin@example.org"
+    assert erin.get("/kb/api/v1/knowledge-bases/erin@example.org:notes").json()["data"]["id"] == kb["id"]
+    assert erin.get("/kb/api/v1/knowledge-bases/u7x2:notes").json()["data"]["id"] == kb["id"]
+    erin = Caller(client, user("u7x2", RW, username="erin"))
+    assert erin.get("/kb/api/v1/knowledge-bases/erin:notes").json()["data"]["id"] == kb["id"]   # before any refresh
+    refs = {k["slug"]: k["ref"] for k in erin.get("/kb/api/v1/knowledge-bases").json()["data"]}
+    assert refs == {"personal": "erin:personal", "notes": "erin:notes"}
+    assert erin.get("/kb/api/v1/knowledge-bases/erin:notes").json()["data"]["id"] == kb["id"]
+    other = Caller(client, user("u9y3", RW, username="frank"))
+    assert other.get("/kb/api/v1/knowledge-bases/erin:notes").status_code == 404
+
+
+def test_group_owned_kbs(client):
+    """`group` makes the KB the group's (`aid2e:dtlz2`): its admins create and manage it, its
+    members see it and add to it, others do not; it cannot be made private."""
+    def member(subject, username, managed=()):
+        return Caller(client, user(subject, RW, username=username).with_organizations({"o1": "AID2E"}, managed))
+    lead, ann = member("s1", "lead", managed=["o1"]), member("s2", "ann")
+    outsider = Caller(client, user("s3", RW, username="zed"))
+    assert ann.post("/kb/api/v1/knowledge-bases", json={"name": "dtlz2", "group": "AID2E"}).status_code == 403
+    assert outsider.post("/kb/api/v1/knowledge-bases", json={"name": "dtlz2", "group": "AID2E"}).status_code == 404
+    created = lead.post("/kb/api/v1/knowledge-bases", json={"name": "DTLZ2", "group": "aid2e"})
+    assert created.status_code == 201
+    kb = created.json()["data"]
+    assert (kb["ref"], kb["owner_subject"], kb["visibility"], kb["groups"], kb["contribute"]) == \
+        ("aid2e:dtlz2", "org:o1", "groups", ["org:o1"], "readers")
+    assert ann.get("/kb/api/v1/knowledge-bases/aid2e:dtlz2").json()["data"]["id"] == kb["id"]
+    assert outsider.get("/kb/api/v1/knowledge-bases/aid2e:dtlz2").status_code == 404
+    assert ann.put(f"/kb/api/v1/knowledge-bases/{kb['id']}", json={"description": "x"}).status_code == 403
+    assert lead.put(f"/kb/api/v1/knowledge-bases/{kb['id']}", json={"description": "x"}).status_code == 200
+    assert lead.put(f"/kb/api/v1/knowledge-bases/{kb['id']}", json={"visibility": "private"}).status_code == 400
+    # a user called like the group keeps their own KB of the same slug; each sees theirs
+    twin = Caller(client, user("s4", RW, username="aid2e"))
+    mine = twin.post("/kb/api/v1/knowledge-bases", json={"name": "dtlz2"}).json()["data"]
+    assert mine["ref"] == "aid2e:dtlz2" and mine["id"] != kb["id"]
+    assert twin.get("/kb/api/v1/knowledge-bases/aid2e:dtlz2").json()["data"]["id"] == mine["id"]
+    assert ann.get("/kb/api/v1/knowledge-bases/aid2e:dtlz2").json()["data"]["id"] == kb["id"]
+
+
 def test_kb_lifecycle_and_refs(alice, bob):
     created = alice.post("/kb/api/v1/knowledge-bases", json={"name": "Pilot Docs", "description": "ops"})
     assert created.status_code == 201

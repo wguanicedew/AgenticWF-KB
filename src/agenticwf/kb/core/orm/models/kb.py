@@ -64,6 +64,9 @@ class KnowledgeBase(BASE, ModelBase, _Owned, _Visible):
     __tablename__ = "kb_knowledge_bases"
 
     id = Column(String(36), primary_key=True, default=new_id)
+    # The owner's username (their email when they have none) for the ref `<owner_name>:<slug>`;
+    # owner_subject stays the key of ownership and access. None for system KBs and local users.
+    owner_name = Column(String(320), nullable=True)
     default_item_visibility = Column(String(16), nullable=False, default="all")
     contribute = Column(String(16), nullable=False, default="owner")
     slug = Column(String(128), nullable=False)
@@ -91,6 +94,7 @@ class KnowledgeBase(BASE, ModelBase, _Owned, _Visible):
 
     __table_args__ = (
         Index("ix_kb_knowledge_bases_owner", "owner_subject"),
+        Index("ix_kb_knowledge_bases_owner_name", "owner_name", postgresql_where=text("owner_name IS NOT NULL")),
         Index("ix_kb_knowledge_bases_groups", "groups", postgresql_using="gin"),
         Index("uq_kb_knowledge_bases_owner_slug", "owner_subject", "slug", unique=True,
               postgresql_where=text("deleted_at IS NULL")),

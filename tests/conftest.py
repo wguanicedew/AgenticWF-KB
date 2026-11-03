@@ -31,8 +31,9 @@ SECRET = b"s" * 48
 
 
 def user(subject="user_alice", scopes=("app:access", "knowledge:read"), org=None, roles=(), groups=None, ttl=3600,
-         client_id=None):
+         client_id=None, username=None):
     return AuthContext(subject=subject, user_id=None if client_id == subject else subject, client_id=client_id,
+                       username=username,
                        organization_id=org, roles=frozenset(roles), scopes=frozenset(scopes),
                        external_identity={"provider": "indigo-iam", "groups": list(groups)} if groups else None,
                        expires_at=int(time.time()) + ttl)

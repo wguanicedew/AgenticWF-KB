@@ -10,6 +10,7 @@ cli = pytest.importorskip("agenticwf_auth_cli.__main__")
 
 KBS = [{"id": "k1", "name": "Docs", "type": "document", "ref": "alice:docs"}]
 HITS = [{"score": 0.91, "knowledge_title": "Run 42", "knowledge_base_id": "k1", "content": "beam  energy\n10 GeV"}]
+CREATED = {"id": "k2", "ref": "aid2e:dtlz2", "type": "document", "visibility": "groups"}
 ANSWER = {"answer": "It doubled <ref>c1</ref>.", "sources": [{"n": 1, "citation_text": "Run 42", "url": None}]}
 
 
@@ -22,7 +23,7 @@ def kb(monkeypatch):
         if request.headers.get("Authorization") != "Bearer kb-token":
             return httpx.Response(401, json={"success": False, "error": {"code": 401, "message": "bad token"}})
         routes = {("GET", "/kb/api/v1/knowledge-bases"): KBS, ("POST", "/kb/api/v1/knowledge-search"): HITS,
-                  ("POST", "/kb/api/v1/agentic-search"): ANSWER}
+                  ("POST", "/kb/api/v1/agentic-search"): ANSWER, ("POST", "/kb/api/v1/knowledge-bases"): CREATED}
         data = routes.get((request.method, request.url.path))
         if data is None:
             return httpx.Response(404, json={"success": False, "error": {"code": 404, "message": "not found"}})
@@ -68,3 +69,11 @@ def test_errors(kb, monkeypatch, capsys):
         monkeypatch.delenv(name, raising=False)
     assert cli.main(["kb", "list"]) == 2                      # neither a KB token nor a Logto sign-in
     assert "missing configuration" in capsys.readouterr().err
+
+
+def test_create(kb, capsys):
+    assert cli.main(["kb", "create", "dtlz2", "--group", "AID2E", "--description", "benchmarks"]) == 0
+    assert json.loads(kb[-1].content) == {"name": "dtlz2", "group": "AID2E", "description": "benchmarks"}
+    assert capsys.readouterr().out.strip() == "aid2e:dtlz2  (id k2, document, groups)"
+    assert cli.main(["kb", "create", "my-kb"]) == 0
+    assert json.loads(kb[-1].content) == {"name": "my-kb"}
