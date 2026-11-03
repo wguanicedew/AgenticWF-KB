@@ -66,6 +66,11 @@ def reassign_owner(old: str, new: str) -> dict[str, int]:
         for table in OWNED_TABLES:
             counts[table] = conn.execute(sa.text(f"UPDATE {table} SET owner_subject = :new WHERE owner_subject = :old"),
                                          {"old": old, "new": new}).rowcount
+        # The KBs moved take the new owner's name (kb_owner_names); the old owner's name is let go.
+        conn.execute(sa.text("DELETE FROM kb_owner_names WHERE owner_subject = :old"), {"old": old})
+        conn.execute(sa.text(
+            "UPDATE kb_knowledge_bases SET owner_name = (SELECT name FROM kb_owner_names WHERE owner_subject = :new) "
+            "WHERE owner_subject = :new"), {"new": new})
     LOG.info("reassigned %s to %s: %s", old, new, counts)
     return counts
 

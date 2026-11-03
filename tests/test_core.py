@@ -10,7 +10,7 @@ def test_init_is_idempotent_and_reaches_head(database):
 
     init_db()   # second time: nothing to do
     with get_engine().connect() as conn:
-        assert conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar() == "0009"
+        assert conn.execute(sa.text("SELECT version_num FROM alembic_version")).scalar() == "0012"
 
 
 def test_missing_extension_is_a_clear_error(database, monkeypatch):

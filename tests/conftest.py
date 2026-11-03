@@ -60,7 +60,7 @@ TABLES = ("kb_embeddings", "kb_chunks", "kb_knowledge_tag_relations", "kb_knowle
           "kb_record_field_stats", "kb_wiki_pages", "kb_wiki_page_revisions", "kb_wiki_folders", "kb_wiki_page_issues",
           "kb_wiki_pending_ops", "kb_wiki_relations", "kb_wiki_communities", "kb_memory_episodes",
           "kb_memory_entities", "kb_memory_facts", "kb_web_search_providers", "kb_remotes", "kb_sites",
-          "kb_user_settings", "kb_prompt_overrides")
+          "kb_user_settings", "kb_prompt_overrides", "kb_owner_names")
 
 
 @pytest.fixture(autouse=True)

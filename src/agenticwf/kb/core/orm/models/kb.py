@@ -64,8 +64,9 @@ class KnowledgeBase(BASE, ModelBase, _Owned, _Visible):
     __tablename__ = "kb_knowledge_bases"
 
     id = Column(String(36), primary_key=True, default=new_id)
-    # The owner's username (their email when they have none) for the ref `<owner_name>:<slug>`;
-    # owner_subject stays the key of ownership and access. None for system KBs and local users.
+    # The owner's name in the ref `u:<name>:<slug>` (a user: username, else email) or
+    # `g:<name>:<slug>` (a group), as kb_owner_names holds it; owner_subject stays the key of
+    # ownership and access. None for system KBs, local users and a name another owner holds.
     owner_name = Column(String(320), nullable=True)
     default_item_visibility = Column(String(16), nullable=False, default="all")
     contribute = Column(String(16), nullable=False, default="owner")
@@ -101,7 +102,24 @@ class KnowledgeBase(BASE, ModelBase, _Owned, _Visible):
     )
 
 
-# --- knowledge (items) --------------------------------------------------------------------------
+class OwnerName(BASE, ModelBase, _Timestamps):
+    """The names KB refs use for owners, one owner per name in each namespace: `u` users (their
+    username, which Logto keeps unique: the account holding it now takes it over), `g` groups
+    (their name as a slug, which Logto does not keep unique: the first group keeps it, later ones
+    get `<name>-2`, ...). `requested` is the name asked for, so a suffixed name stays stable."""
+    __tablename__ = "kb_owner_names"
+
+    kind = Column(String(1), primary_key=True)                  # u | g
+    name = Column(String(320), primary_key=True)
+    requested = Column(String(320), nullable=False)
+    owner_subject = Column(String(255), nullable=False)
+
+    __table_args__ = (
+        Index("uq_kb_owner_names_owner", "owner_subject", unique=True),
+    )
+
+
+# --- knowledge (items)--------------------------------------------------------------------------
 class Knowledge(BASE, ModelBase, _Owned, _Visible):
     __tablename__ = "kb_knowledges"
 

@@ -3,11 +3,12 @@ KnowledgeBaseService: create, list, read, change and delete knowledge bases
 (docs/data-model.md, Ownership and visibility; docs/api.md, Knowledge bases).
 
 A KB is addressed by id or by `<owner>:<slug>`; the slug is the part after the last colon. Its
-`ref` names the owner by username (`alice:hpo-history`; the email for an account with no username:
-`alice@example.org:personal`), a group's KB by the group's name (`aid2e:dtlz2`, owner
+`ref` names the owner in a namespace, each name belonging to one owner (kb_owner_names): a user
+by username, `u:alice:hpo-history` (the email for an account with no username:
+`u:alice@example.org:personal`), a group by its name as a slug, `g:aid2e:dtlz2` (owner
 `org:<organization id>`: created with `group`, managed by the group's admins, read and added to
-by its members), else by subject (`system:eic-docs`, `local:wguan:personal`); a ref with the
-owner's subject still resolves. Every user has a private `personal` KB, created on their
+by its members; a second group of the same name is `g:aid2e-2`), else by subject
+(`system:eic-docs`, `local:wguan:personal`); a ref with the owner's subject still resolves. Every user has a private `personal` KB, created on their
 first request. A KB the principal cannot see is "not found".
 """
 
@@ -19,14 +20,17 @@ from agenticwf.auth.context import AuthContext
 
 from agenticwf.kb.core.common.utils import slugify
 from agenticwf.kb.core.orm.base.session import async_session_scope
-from agenticwf.kb.core.orm.models.kb import (Chunk, Embedding, Knowledge, KnowledgeBase, default_chunking_config,
-                                   default_indexing_strategy, utcnow)
+from sqlalchemy.dialects.postgresql import insert
+
+from agenticwf.kb.core.orm.models.kb import (Chunk, Embedding, Knowledge, KnowledgeBase, OwnerName,
+                                   default_chunking_config, default_indexing_strategy, utcnow)
 from agenticwf.kb.runtime import access, features
 from agenticwf.kb.runtime.errors import Conflict, Forbidden, Invalid, NotFound
 from agenticwf.kb.runtime.storage import LocalStorage, owner_scope
 
 KB_TYPES = ("document", "faq", "records")
 PERSONAL = "personal"
+USERS, GROUPS = "u", "g"            # the namespaces of owner names: `u:<username>:<slug>`, `g:<group>:<slug>`
 UPDATABLE = ("name", "description", "chunking_config", "indexing_strategy", "retrieval_config", "freshness_config",
              "question_generation_config", "vlm_config", "image_processing_config", "is_pinned", "records_config",
              "wiki_config", "memory_config")
@@ -41,7 +45,7 @@ def document_defaults(owner: str) -> dict:
 
 
 def kb_dict(kb: KnowledgeBase, knowledge_count: int | None = None) -> dict:
-    data = {"id": kb.id, "slug": kb.slug, "ref": f"{kb.owner_name or kb.owner_subject}:{kb.slug}", "name": kb.name,
+    data = {"id": kb.id, "slug": kb.slug, "ref": kb_ref(kb), "name": kb.name,
             "description": kb.description, "type": kb.type, "owner_subject": kb.owner_subject,
             "owner_name": kb.owner_name,
             "visibility": kb.visibility, "groups": list(kb.groups or []),
@@ -67,6 +71,85 @@ def owner_name(ctx: AuthContext) -> str | None:
     """What a principal's KB refs name them by: their username (authsvc gives the email when the
     account has none); None for machines and principals without one (local users)."""
     return None if ctx.is_machine else (getattr(ctx, "username", None) or None)
+
+
+def namespace(owner_subject: str) -> str:
+    return GROUPS if owner_subject.startswith(access.GROUP_OWNER) else USERS
+
+
+def kb_ref(kb: KnowledgeBase) -> str:
+    """`u:<username>:<slug>` or `g:<group>:<slug>`, else `<owner subject>:<slug>`."""
+    if kb.owner_name:
+        return f"{namespace(kb.owner_subject)}:{kb.owner_name}:{kb.slug}"
+    return f"{kb.owner_subject}:{kb.slug}"
+
+
+def wanted_names(ctx: AuthContext) -> dict[str, tuple[str, str]]:
+    """{owner subject: (namespace, name)} of the principal and their groups, as the principal's
+    context reports them now."""
+    if ctx.is_machine:
+        return {}
+    name = owner_name(ctx)
+    wanted = {ctx.subject: (USERS, name)} if name else {}
+    wanted.update({f"{access.GROUP_OWNER}{org_id}": (GROUPS, slugify(org_name))
+                   for org_id, org_name in (getattr(ctx, "organizations", None) or {}).items()})
+    return wanted
+
+
+async def claim_names(session, wanted: dict[str, tuple[str, str]]) -> dict[str, str | None]:
+    """Give each owner subject the name it asks for (`wanted`: {subject: (namespace, name)}) and
+    bring its KBs' owner_name up to date; returns {subject: the name it holds, or None}.
+
+    A username is unique in Logto, so the account asking for it now takes it from whoever held
+    it (an account renamed since: their KBs fall back to subject refs). A group name is not, so
+    the first group keeps it and the next gets `<name>-2`, `<name>-3`, ... (kept while the group
+    keeps its name)."""
+    if not wanted:
+        return {}
+    held = {row.owner_subject: row for row in (await session.execute(
+        sa.select(OwnerName).where(OwnerName.owner_subject.in_(list(wanted))))).scalars()}
+    names = {}
+    for subject, (kind, requested) in wanted.items():
+        row = held.get(subject)
+        if row is not None and (row.kind, row.requested) == (kind, requested):
+            names[subject] = row.name
+        else:
+            if row is not None:     # renamed: let the old name go
+                await session.execute(sa.delete(OwnerName).where(OwnerName.owner_subject == subject))
+            names[subject] = await _claim(session, subject, kind, requested)
+        if names[subject] is not None:
+            await _rename_kbs(session, subject, names[subject])
+    return names
+
+
+async def _claim(session, subject: str, kind: str, requested: str) -> str | None:
+    if kind == USERS:
+        holder = (await session.execute(sa.select(OwnerName.owner_subject).where(
+            OwnerName.kind == USERS, OwnerName.name == requested))).scalar_one_or_none()
+        if holder is not None and holder != subject:
+            await session.execute(sa.delete(OwnerName).where(OwnerName.owner_subject == holder))
+            await _rename_kbs(session, holder, None)
+        name = requested
+    else:
+        taken = set((await session.execute(sa.select(OwnerName.name).where(
+            OwnerName.kind == GROUPS, sa.or_(OwnerName.name == requested,
+                                             OwnerName.name.like(f"{requested}-%"))))).scalars())
+        name, n = requested, 2
+        while name in taken:
+            name, n = f"{requested}-{n}", n + 1
+    claimed = (await session.execute(insert(OwnerName).values(
+        kind=kind, name=name, requested=requested, owner_subject=subject).on_conflict_do_nothing()
+        .returning(OwnerName.name))).scalar_one_or_none()
+    if claimed is None:     # a concurrent request claimed for this owner (or took the name) first
+        claimed = (await session.execute(sa.select(OwnerName.name).where(
+            OwnerName.owner_subject == subject))).scalar_one_or_none()
+    return claimed
+
+
+async def _rename_kbs(session, subject: str, name: str | None) -> None:
+    await session.execute(sa.update(KnowledgeBase).where(
+        KnowledgeBase.owner_subject == subject, KnowledgeBase.owner_name.is_distinct_from(name)).values(
+        owner_name=name, updated_at=KnowledgeBase.updated_at))   # a rename is not a change of content
 
 
 def find_group(ctx: AuthContext, wanted: str) -> tuple[str, str]:
@@ -121,24 +204,26 @@ class KnowledgeBaseService:
     # -- lookups -------------------------------------------------------------------------------------
     @staticmethod
     async def load(session, ctx: AuthContext, ref: str, for_update: bool = False) -> KnowledgeBase:
-        """The KB `ref` (id or `<owner>:<slug>`, the owner by username, group name or subject) if
-        the principal can see it, else NotFound."""
+        """The KB `ref` (id, `u:<username>:<slug>`, `g:<group>:<slug>` or `<owner subject>:<slug>`)
+        if the principal can see it, else NotFound."""
         owner, slug = split_ref(ref)
         query = sa.select(KnowledgeBase).where(KnowledgeBase.deleted_at.is_(None))
         if owner is None:
             query = query.where(KnowledgeBase.id == slug)
         else:
-            # The caller's own username names their KBs even before owner_name is filled in.
-            mine = (KnowledgeBase.owner_subject == ctx.subject) if owner == owner_name(ctx) else sa.false()
-            query = query.where(KnowledgeBase.slug == slug, sa.or_(
-                KnowledgeBase.owner_subject == owner, KnowledgeBase.owner_name == owner, mine))
+            kind, _, name = owner.partition(":")
+            if kind in (USERS, GROUPS) and name:
+                is_group = KnowledgeBase.owner_subject.startswith(access.GROUP_OWNER)
+                who = sa.and_(KnowledgeBase.owner_name == name, is_group if kind == GROUPS else ~is_group)
+                if kind == USERS and name == owner_name(ctx):
+                    # the caller's own username names their KBs even before they claim it
+                    who = sa.or_(who, KnowledgeBase.owner_subject == ctx.subject)
+            else:
+                who = KnowledgeBase.owner_subject == owner
+            query = query.where(KnowledgeBase.slug == slug, who)
         if for_update:
             query = query.with_for_update()
-        groups = getattr(ctx, "organizations", None) or {}
-        # When a name is shared (a user `aid2e` and a group AID2E), the first visible one wins: the
-        # owner's subject, then the caller's own KB, then one of the caller's groups.
-        rows = sorted((await session.execute(query)).scalars().all(), key=lambda kb: (
-            kb.owner_subject != owner, kb.owner_subject != ctx.subject, access.owner_group(kb) not in groups))
+        rows = sorted((await session.execute(query)).scalars().all(), key=lambda kb: kb.owner_subject != ctx.subject)
         kb = next((kb for kb in rows if access.can_see(ctx, kb)), None)
         if kb is None:
             raise NotFound("knowledge base not found")
@@ -159,20 +244,12 @@ class KnowledgeBaseService:
 
     async def ensure_personal(self, ctx: AuthContext) -> str | None:
         """The principal's personal KB id, created on first use (not for machine clients). Also
-        keeps the owner names of their KBs and their groups' KBs current (a username set, a group
-        renamed since)."""
+        claims the owner names of the principal and their groups and keeps their KBs' refs current
+        (a username set, a group renamed since)."""
         if ctx.is_machine:
             return None
-        name = owner_name(ctx)
-        renames = {ctx.subject: name} if name else {}
-        renames.update({f"{access.GROUP_OWNER}{org_id}": slugify(org_name)
-                        for org_id, org_name in (getattr(ctx, "organizations", None) or {}).items()})
         async with async_session_scope() as session:
-            for owner, new_name in renames.items():
-                await session.execute(sa.update(KnowledgeBase).where(
-                    KnowledgeBase.owner_subject == owner,
-                    KnowledgeBase.owner_name.is_distinct_from(new_name)).values(
-                    owner_name=new_name, updated_at=KnowledgeBase.updated_at))   # a rename is not a change of content
+            name = (await claim_names(session, wanted_names(ctx))).get(ctx.subject)
             kb = (await session.execute(sa.select(KnowledgeBase).where(
                 KnowledgeBase.owner_subject == ctx.subject, KnowledgeBase.slug == PERSONAL,
                 KnowledgeBase.deleted_at.is_(None)))).scalar_one_or_none()
@@ -250,14 +327,14 @@ class KnowledgeBaseService:
             org_id, org_name = find_group(ctx, str(body["group"]))
             if not access.is_admin(ctx) and org_id not in (getattr(ctx, "managed_organizations", None) or ()):
                 raise Forbidden("only an admin of the group creates its knowledge bases")
-            owner, name_of_owner = f"{access.GROUP_OWNER}{org_id}", slugify(org_name)
+            owner, wanted = f"{access.GROUP_OWNER}{org_id}", (GROUPS, slugify(org_name))
             visibility = body.get("visibility") or "groups"
             groups = group_share(ctx, owner, visibility, body.get("groups") or [])
         else:
             owner = access.SYSTEM_OWNER if body.get("system") else ctx.subject
             if owner == access.SYSTEM_OWNER and not access.is_admin(ctx):
                 raise Forbidden("only an admin creates system knowledge bases")
-            name_of_owner = None if owner == access.SYSTEM_OWNER else owner_name(ctx)
+            wanted = (USERS, owner_name(ctx)) if owner != access.SYSTEM_OWNER and owner_name(ctx) else None
             visibility = body.get("visibility") or "private"
             groups = access.check_share(ctx, visibility, body.get("groups") or [])
         if visibility == "all" and not access.is_admin(ctx):
@@ -282,6 +359,7 @@ class KnowledgeBaseService:
             strategy["vector_enabled"] = False
         slug = slugify(body.get("slug") or name)
         async with async_session_scope() as session:
+            name_of_owner = (await claim_names(session, {owner: wanted})).get(owner) if wanted else None
             taken = set((await session.execute(sa.select(KnowledgeBase.slug).where(
                 KnowledgeBase.owner_subject == owner, KnowledgeBase.deleted_at.is_(None),
                 KnowledgeBase.slug.like(f"{slug}%")))).scalars())

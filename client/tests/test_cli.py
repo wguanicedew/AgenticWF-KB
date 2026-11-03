@@ -8,9 +8,9 @@ import pytest
 
 cli = pytest.importorskip("agenticwf_auth_cli.__main__")
 
-KBS = [{"id": "k1", "name": "Docs", "type": "document", "ref": "alice:docs"}]
+KBS = [{"id": "k1", "name": "Docs", "type": "document", "ref": "u:alice:docs"}]
 HITS = [{"score": 0.91, "knowledge_title": "Run 42", "knowledge_base_id": "k1", "content": "beam  energy\n10 GeV"}]
-CREATED = {"id": "k2", "ref": "aid2e:dtlz2", "type": "document", "visibility": "groups"}
+CREATED = {"id": "k2", "ref": "g:aid2e:dtlz2", "type": "document", "visibility": "groups"}
 ANSWER = {"answer": "It doubled <ref>c1</ref>.", "sources": [{"n": 1, "citation_text": "Run 42", "url": None}]}
 
 
@@ -41,7 +41,7 @@ def kb(monkeypatch):
 
 def test_list_and_search(kb, capsys):
     assert cli.main(["kb", "list"]) == 0
-    assert capsys.readouterr().out.strip() == "k1  Docs  (document, alice:docs)"
+    assert capsys.readouterr().out.strip() == "k1  Docs  (document, u:alice:docs)"
 
     assert cli.main(["kb", "search", "beam energy", "--kb", "k1", "--top-k", "3"]) == 0
     assert json.loads(kb[-1].content) == {"query": "beam energy", "knowledge_base_ids": ["k1"], "top_k": 3}
@@ -74,6 +74,6 @@ def test_errors(kb, monkeypatch, capsys):
 def test_create(kb, capsys):
     assert cli.main(["kb", "create", "dtlz2", "--group", "AID2E", "--description", "benchmarks"]) == 0
     assert json.loads(kb[-1].content) == {"name": "dtlz2", "group": "AID2E", "description": "benchmarks"}
-    assert capsys.readouterr().out.strip() == "aid2e:dtlz2  (id k2, document, groups)"
+    assert capsys.readouterr().out.strip() == "g:aid2e:dtlz2  (id k2, document, groups)"
     assert cli.main(["kb", "create", "my-kb"]) == 0
     assert json.loads(kb[-1].content) == {"name": "my-kb"}

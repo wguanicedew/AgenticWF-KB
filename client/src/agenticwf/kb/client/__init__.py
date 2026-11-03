@@ -96,8 +96,8 @@ class KBClient:
         return self.request("GET", "/knowledge-bases?page_size=100")
 
     def create_knowledge_base(self, name: str, group: str | None = None, **body) -> dict:
-        """A new KB, yours (`<username>:<slug>`) or, with `group` (a group you administer: its name
-        or id), the group's (`<group>:<slug>`). `body`: slug, description, type, visibility, groups,
+        """A new KB, yours (`u:<username>:<slug>`) or, with `group` (a group you administer: its name
+        or id), the group's (`g:<group>:<slug>`). `body`: slug, description, type, visibility, groups,
         contribute, ... (the API's fields)."""
         payload = {"name": name, **body}
         if group:

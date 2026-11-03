@@ -83,27 +83,49 @@ def test_system_model_and_user_models(alice, bob):
 
 # --- knowledge bases --------------------------------------------------------------------------
 def test_kb_refs_name_the_owner_by_username(client):
-    """The ref is `<username>:<slug>`; the owner's subject still resolves, and a username set later
-    (an account that had only its email) renames the refs of all their KBs."""
+    """The ref is `u:<username>:<slug>`; the owner's subject still resolves, a bare username does
+    not, and a username set later (an account that had only its email) renames the refs of all
+    their KBs."""
     erin = Caller(client, user("u7x2", RW, username="erin@example.org"))
     kb = erin.post("/kb/api/v1/knowledge-bases", json={"name": "Notes"}).json()["data"]
-    assert kb["ref"] == "erin@example.org:notes" and kb["owner_name"] == "erin@example.org"
-    assert erin.get("/kb/api/v1/knowledge-bases/erin@example.org:notes").json()["data"]["id"] == kb["id"]
+    assert kb["ref"] == "u:erin@example.org:notes" and kb["owner_name"] == "erin@example.org"
+    assert erin.get("/kb/api/v1/knowledge-bases/u:erin@example.org:notes").json()["data"]["id"] == kb["id"]
     assert erin.get("/kb/api/v1/knowledge-bases/u7x2:notes").json()["data"]["id"] == kb["id"]
+    assert erin.get("/kb/api/v1/knowledge-bases/erin@example.org:notes").status_code == 404
     erin = Caller(client, user("u7x2", RW, username="erin"))
-    assert erin.get("/kb/api/v1/knowledge-bases/erin:notes").json()["data"]["id"] == kb["id"]   # before any refresh
+    assert erin.get("/kb/api/v1/knowledge-bases/u:erin:notes").json()["data"]["id"] == kb["id"]   # before any refresh
     refs = {k["slug"]: k["ref"] for k in erin.get("/kb/api/v1/knowledge-bases").json()["data"]}
-    assert refs == {"personal": "erin:personal", "notes": "erin:notes"}
-    assert erin.get("/kb/api/v1/knowledge-bases/erin:notes").json()["data"]["id"] == kb["id"]
+    assert refs == {"personal": "u:erin:personal", "notes": "u:erin:notes"}
+    assert erin.get("/kb/api/v1/knowledge-bases/u:erin:notes").json()["data"]["id"] == kb["id"]
     other = Caller(client, user("u9y3", RW, username="frank"))
-    assert other.get("/kb/api/v1/knowledge-bases/erin:notes").status_code == 404
+    assert other.get("/kb/api/v1/knowledge-bases/u:erin:notes").status_code == 404
+
+
+def test_a_username_names_one_owner(client):
+    """A username belongs to one account: when another account has it now (the first renamed
+    since, as Logto allows), it takes it over and the first one's refs fall back to its subject."""
+    old = Caller(client, user("s21", RW, username="gail"))
+    old_kb = old.post("/kb/api/v1/knowledge-bases", json={"name": "Notes"}).json()["data"]
+    assert old_kb["ref"] == "u:gail:notes"
+    new = Caller(client, user("s22", RW, username="gail"))
+    new_kb = new.post("/kb/api/v1/knowledge-bases", json={"name": "Notes"}).json()["data"]
+    assert new_kb["ref"] == "u:gail:notes"
+    assert new.get("/kb/api/v1/knowledge-bases/u:gail:notes").json()["data"]["id"] == new_kb["id"]
+    assert old.get(f"/kb/api/v1/knowledge-bases/{old_kb['id']}").json()["data"]["ref"] == "s21:notes"
+    # the first account, renamed, claims its new name
+    old = Caller(client, user("s21", RW, username="gail2"))
+    refs = {k["id"]: k["ref"] for k in old.get("/kb/api/v1/knowledge-bases").json()["data"]}
+    assert refs[old_kb["id"]] == "u:gail2:notes"
+    assert new.get("/kb/api/v1/knowledge-bases/u:gail:notes").json()["data"]["id"] == new_kb["id"]
 
 
 def test_group_owned_kbs(client):
-    """`group` makes the KB the group's (`aid2e:dtlz2`): its admins create and manage it, its
-    members see it and add to it, others do not; it cannot be made private."""
-    def member(subject, username, managed=()):
-        return Caller(client, user(subject, RW, username=username).with_organizations({"o1": "AID2E"}, managed))
+    """`group` makes the KB the group's (`g:aid2e:dtlz2`): its admins create and manage it, its
+    members see it and add to it, others do not; it cannot be made private. Users and groups have
+    separate names, and a group name belongs to one group."""
+    def member(subject, username, orgs=None, managed=()):
+        return Caller(client, user(subject, RW, username=username).with_organizations(orgs or {"o1": "AID2E"},
+                                                                                      managed))
     lead, ann = member("s1", "lead", managed=["o1"]), member("s2", "ann")
     outsider = Caller(client, user("s3", RW, username="zed"))
     assert ann.post("/kb/api/v1/knowledge-bases", json={"name": "dtlz2", "group": "AID2E"}).status_code == 403
@@ -112,18 +134,33 @@ def test_group_owned_kbs(client):
     assert created.status_code == 201
     kb = created.json()["data"]
     assert (kb["ref"], kb["owner_subject"], kb["visibility"], kb["groups"], kb["contribute"]) == \
-        ("aid2e:dtlz2", "org:o1", "groups", ["org:o1"], "readers")
-    assert ann.get("/kb/api/v1/knowledge-bases/aid2e:dtlz2").json()["data"]["id"] == kb["id"]
-    assert outsider.get("/kb/api/v1/knowledge-bases/aid2e:dtlz2").status_code == 404
+        ("g:aid2e:dtlz2", "org:o1", "groups", ["org:o1"], "readers")
+    assert ann.get("/kb/api/v1/knowledge-bases/g:aid2e:dtlz2").json()["data"]["id"] == kb["id"]
+    assert ann.get("/kb/api/v1/knowledge-bases/org:o1:dtlz2").json()["data"]["id"] == kb["id"]
+    assert outsider.get("/kb/api/v1/knowledge-bases/g:aid2e:dtlz2").status_code == 404
     assert ann.put(f"/kb/api/v1/knowledge-bases/{kb['id']}", json={"description": "x"}).status_code == 403
     assert lead.put(f"/kb/api/v1/knowledge-bases/{kb['id']}", json={"description": "x"}).status_code == 200
     assert lead.put(f"/kb/api/v1/knowledge-bases/{kb['id']}", json={"visibility": "private"}).status_code == 400
-    # a user called like the group keeps their own KB of the same slug; each sees theirs
-    twin = Caller(client, user("s4", RW, username="aid2e"))
+    # a user called like the group is `u:aid2e`, the group `g:aid2e`: each ref names one KB
+    twin = member("s4", "aid2e")
     mine = twin.post("/kb/api/v1/knowledge-bases", json={"name": "dtlz2"}).json()["data"]
-    assert mine["ref"] == "aid2e:dtlz2" and mine["id"] != kb["id"]
-    assert twin.get("/kb/api/v1/knowledge-bases/aid2e:dtlz2").json()["data"]["id"] == mine["id"]
-    assert ann.get("/kb/api/v1/knowledge-bases/aid2e:dtlz2").json()["data"]["id"] == kb["id"]
+    assert mine["ref"] == "u:aid2e:dtlz2" and mine["id"] != kb["id"]
+    assert twin.get("/kb/api/v1/knowledge-bases/u:aid2e:dtlz2").json()["data"]["id"] == mine["id"]
+    assert twin.get("/kb/api/v1/knowledge-bases/g:aid2e:dtlz2").json()["data"]["id"] == kb["id"]
+    assert ann.get("/kb/api/v1/knowledge-bases/u:aid2e:dtlz2").status_code == 404
+    # another group of the same name gets the next free one, and keeps it
+    other = member("s5", "olga", orgs={"o2": "aid2e"}, managed=["o2"])
+    theirs = other.post("/kb/api/v1/knowledge-bases", json={"name": "dtlz2", "group": "o2"}).json()["data"]
+    assert theirs["ref"] == "g:aid2e-2:dtlz2"
+    assert other.get("/kb/api/v1/knowledge-bases/g:aid2e-2:dtlz2").json()["data"]["id"] == theirs["id"]
+    assert lead.get("/kb/api/v1/knowledge-bases/g:aid2e:dtlz2").json()["data"]["id"] == kb["id"]
+    assert member("s1", "lead", managed=["o1"]).get("/kb/api/v1/me").status_code == 200
+    assert other.get(f"/kb/api/v1/knowledge-bases/{theirs['id']}").json()["data"]["ref"] == "g:aid2e-2:dtlz2"
+    # a renamed group lets its old name go and claims the new one
+    renamed = member("s1", "lead", orgs={"o1": "AID2E Lab"}, managed=["o1"])
+    assert renamed.get(f"/kb/api/v1/knowledge-bases/{kb['id']}").json()["data"]["ref"] == "g:aid2e:dtlz2"
+    renamed.get("/kb/api/v1/me")
+    assert renamed.get(f"/kb/api/v1/knowledge-bases/{kb['id']}").json()["data"]["ref"] == "g:aid2e-lab:dtlz2"
 
 
 def test_kb_lifecycle_and_refs(alice, bob):

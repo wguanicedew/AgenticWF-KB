@@ -1,8 +1,8 @@
 """agenticwf kb — the knowledge service from the command line.
 
     agenticwf kb list                                your knowledge bases
-    agenticwf kb create my-kb                        a new KB of yours: <username>:my-kb
-    agenticwf kb create dtlz2 --group AID2E          a group's KB (you administer it): aid2e:dtlz2
+    agenticwf kb create my-kb                        a new KB of yours: u:<username>:my-kb
+    agenticwf kb create dtlz2 --group AID2E          a group's KB (you administer it): g:aid2e:dtlz2
     agenticwf kb search "beam energy" [--kb ID]      hybrid search, best passages first
     agenticwf kb ask "what changed in run 42?"       agentic search: an answer and its sources
     agenticwf kb call GET /knowledge-bases           any KB API call (the path under /api/v1)
