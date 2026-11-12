@@ -14,6 +14,10 @@ from __future__ import annotations
 import re
 from typing import Awaitable, Callable
 
+from agenticwf.kb.core.common.logging import get_logger
+
+LOG = get_logger(__name__)
+
 MAX_CANDIDATES = 200
 MMR_LAMBDA = 0.7
 _TOKENS = re.compile(r"\w+", re.UNICODE)
@@ -64,7 +68,8 @@ async def rerank(query: str, items: list[dict], scorer: Scorer | None, top_k: in
     candidates = items[:MAX_CANDIDATES]
     try:
         scores = await scorer(query, [item.get("content", "") for item in candidates])
-    except Exception:
+    except Exception as exc:
+        LOG.warning("rerank failed, keeping the retrieval order: %s", exc)
         return items[:top_k]            # degrade to retrieval order
     kept = degrade(list(zip(candidates, scores)), threshold, scoped)
     out = []

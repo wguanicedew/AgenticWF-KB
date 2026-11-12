@@ -69,7 +69,8 @@ class KBServices:
     prompts: Any = field(default=None, repr=False)        # PromptService
 
     def task_handlers(self) -> dict:
-        handlers = {**self.knowledge.handlers(), **self.enrichment.handlers(), **self.freshness.handlers()}
+        handlers = {**self.knowledge.handlers(), **self.enrichment.handlers(), **self.freshness.handlers(),
+                    **self.knowledge_bases.handlers()}
         for extra in (self.sites, self.records, self.wiki_pipeline, self.memory):
             if extra is not None:
                 handlers.update(extra.handlers())

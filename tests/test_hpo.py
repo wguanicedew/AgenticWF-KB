@@ -256,3 +256,60 @@ def test_python_client_warm_start_round_trip(client):
     assert states.count("COMPLETE") == 25 and states.count("WAITING") == 5     # history added, points enqueued
     new.optimize(lambda t: (t.suggest_float("x", -5, 5) - 1) ** 2 + (t.suggest_int("y", 0, 10) - 3) ** 2, n_trials=5)
     assert new.best_value <= past.best_value + 1e-9
+
+
+def _hpo_typedef():
+    from agenticwf.kb.runtime.records.plugins.hpo import HPO_JOB
+    from agenticwf.kb.runtime.records.schema import TypeDef
+    return TypeDef(name="hpo_job", qualified="system:hpo_job", version=1, schema=HPO_JOB["schema"],
+                   roles=HPO_JOB["roles"])
+
+
+def test_metadata_numbers_and_booleans_filter_by_their_type():
+    from agenticwf.kb.runtime.records import query as rq
+    td = _hpo_typedef()
+    records = {name: {"job_id": name, "metadata": meta} for name, meta in {
+        "a": {"n_layers": 3, "gpu": True, "tag": "x"}, "b": {"n_layers": 10, "gpu": False, "tag": "y"},
+        "c": {"n_layers": "10", "gpu": "true"}}.items()}
+
+    def matching(node):
+        return {name for name, r in records.items() if rq.evaluate(td, node, r)}
+
+    assert matching({"field": "metadata.n_layers", "op": "gt", "value": 3}) == {"b"}       # not "10" < "3"
+    assert matching({"field": "metadata.n_layers", "op": "between", "value": [2, 5]}) == {"a"}
+    assert matching({"field": "metadata.n_layers", "op": "in", "value": [3, 10]}) == {"a", "b"}
+    assert matching({"field": "metadata.gpu", "op": "eq", "value": True}) == {"a"}
+    assert matching({"field": "metadata.gpu", "op": "eq", "value": False}) == {"b"}
+    assert matching({"field": "metadata.tag", "op": "eq", "value": "x"}) == {"a"}            # strings as before
+    assert matching({"field": "metadata.n_layers", "op": "eq", "value": "10"}) == {"b", "c"}
+
+    sql, _, params, _ = rq.compile_query(td, {"filter": {"and": [
+        {"field": "metadata.n_layers", "op": "gt", "value": 3},
+        {"field": "metadata.gpu", "op": "eq", "value": True},
+        {"field": "metadata.tag", "op": "eq", "value": "x"}]}}, 1000)
+    assert "= 'number' THEN" in sql and "::float8" in sql
+    assert "= 'boolean' THEN" in sql and "::boolean" in sql
+    assert 3.0 in params.values() and True in params.values() and "x" in params.values()
+
+
+def test_metadata_numbers_and_booleans_query_end_to_end(client):
+    alice = Caller(client, user("alice", RW, org="eic"))
+    kb = alice.post("/kb/api/v1/knowledge-bases", json={
+        "name": "HPO meta", "type": "records", "records_config": {"default_type": "hpo_job"}}).json()["data"]
+    rng = random.Random(1)
+    records = []
+    for i, (layers, gpu) in enumerate([(3, True), (10, False), (20, True)]):
+        record = job(i, rng)
+        record["metadata"] = {**record["metadata"], "n_layers": layers, "gpu": gpu}
+        records.append(record)
+    report = alice.post(f"/kb/api/v1/knowledge-bases/{kb['id']}/records", json={"records": records}).json()["data"]
+    assert report["created"] == 3 and report["invalid"] == 0
+
+    def ids(node):
+        data = alice.post("/kb/api/v1/records/query", json={
+            "record_type": "hpo_job", "knowledge_base_ids": [kb["id"]], "filter": node, "limit": 100}).json()["data"]
+        return {r["external_id"] for r in data["records"]}
+
+    assert ids({"field": "metadata.n_layers", "op": "gt", "value": 3}) == {"job-cifar100-1", "job-cifar100-2"}
+    assert ids({"field": "metadata.gpu", "op": "eq", "value": True}) == {"job-cifar100-0", "job-cifar100-2"}
+    assert ids({"field": "metadata.n_layers", "op": "lte", "value": 3}) == {"job-cifar100-0"}

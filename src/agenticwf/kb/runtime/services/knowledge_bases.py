@@ -19,10 +19,11 @@ import sqlalchemy as sa
 from agenticwf.auth.context import AuthContext
 
 from agenticwf.kb.core.common.utils import slugify
+from agenticwf.kb.core.common.exceptions import DatabaseException
 from agenticwf.kb.core.orm.base.session import async_session_scope
 from sqlalchemy.dialects.postgresql import insert
 
-from agenticwf.kb.core.orm.models.kb import (Chunk, Embedding, Knowledge, KnowledgeBase, OwnerName,
+from agenticwf.kb.core.orm.models.kb import (Chunk, Embedding, Knowledge, KnowledgeBase, OwnerName, Task,
                                    default_chunking_config, default_indexing_strategy, utcnow)
 from agenticwf.kb.runtime import access, features
 from agenticwf.kb.runtime.errors import Conflict, Forbidden, Invalid, NotFound
@@ -40,13 +41,26 @@ def document_defaults(owner: str) -> dict:
     """A new document KB's wiki and memory switches, from `[knowledge_bases]`; a system KB feeds
     no one's memory."""
     personal = owner != access.SYSTEM_OWNER and not owner.startswith(access.GROUP_OWNER)
-    return {"indexing_strategy": {**default_indexing_strategy(), "wiki_enabled": features.kb_default("wiki_enabled")},
+    return {"indexing_strategy": {**default_indexing_strategy(), "wiki_enabled": features.kb_default("wiki_enabled"),
+                                  "contextual_enabled": features.kb_default("contextual")},
             "memory_config": {"enabled": features.kb_default("memory_enabled") and personal}}
 
 
-def kb_dict(kb: KnowledgeBase, knowledge_count: int | None = None) -> dict:
+async def group_names(session, kbs) -> dict[str, str]:
+    """{`org:<id>`: name} of the groups owning or shared with these KBs, as kb_owner_names knows
+    them (the name of a group someone in it has used the KB with since), for pages to show names."""
+    subjects = {g for kb in kbs for g in [kb.owner_subject, *(kb.groups or [])] if g.startswith(access.GROUP_OWNER)}
+    if not subjects:
+        return {}
+    rows = await session.execute(sa.select(OwnerName.owner_subject, OwnerName.name).where(
+        OwnerName.kind == GROUPS, OwnerName.owner_subject.in_(subjects)))
+    return dict(rows.all())
+
+
+def kb_dict(kb: KnowledgeBase, knowledge_count: int | None = None, names: dict[str, str] | None = None) -> dict:
     data = {"id": kb.id, "slug": kb.slug, "ref": kb_ref(kb), "name": kb.name,
             "description": kb.description, "type": kb.type, "owner_subject": kb.owner_subject,
+            "status": kb.status or "active",
             "owner_name": kb.owner_name,
             "visibility": kb.visibility, "groups": list(kb.groups or []),
             "default_item_visibility": kb.default_item_visibility, "contribute": kb.contribute,
@@ -64,6 +78,8 @@ def kb_dict(kb: KnowledgeBase, knowledge_count: int | None = None) -> dict:
         data["faq_config"] = (kb.indexing_strategy or {}).get("faq")
     if knowledge_count is not None:
         data["knowledge_count"] = knowledge_count
+    if names is not None:
+        data["group_names"] = {g: names[g] for g in [kb.owner_subject, *data["groups"]] if g in names}
     return data
 
 
@@ -195,6 +211,32 @@ async def purge_kb_rows(session, kb_id: str) -> None:
     await session.execute(sa.delete(KnowledgeBase).where(KnowledgeBase.id == kb_id))
 
 
+DELETE_TASK = "knowledge_base:delete"
+REMOVING = ("removing", "purging")   # KB status while the delete task has work left (purging: every row goes)
+DELETE_BATCH = 5000            # index rows / chunks removed per transaction by the delete task
+REQUEST_LOCK_TIMEOUT = "5s"    # a delete request waits this long for a KB another job holds
+TASK_LOCK_TIMEOUT = "60s"      # the delete task's statements; a timeout retries the task later
+
+
+async def enqueue_removal(session, kb) -> str | None:
+    """Queue the knowledge_base:delete task of a KB being removed. Its knowledge_base_id stays
+    empty, so purge_kb_rows does not delete the task that runs it."""
+    from agenticwf.kb.runtime.tasks import queue
+
+    return await queue.enqueue(session, DELETE_TASK, {"knowledge_base_id": kb.id}, owner_subject=kb.owner_subject,
+                               owner_org=kb.owner_org, unique_key=f"kb-delete:{kb.id}", max_retry=20)
+
+
+def lock_timed_out(exc: BaseException | None) -> bool:
+    """A statement gave up waiting for a lock (SET LOCAL lock_timeout; SQLSTATE 55P03), however
+    wrapped (DatabaseException from the session scope, SQLAlchemy's DBAPIError, psycopg's)."""
+    while exc is not None:
+        if "55P03" in (getattr(exc, "sqlstate", None), getattr(getattr(exc, "orig", None), "sqlstate", None)):
+            return True
+        exc = exc.__cause__
+    return False
+
+
 class KnowledgeBaseService:
     def __init__(self, models, storage: LocalStorage):
         self.models = models
@@ -274,10 +316,14 @@ class KnowledgeBaseService:
 
     # -- the API -------------------------------------------------------------------------------------
     async def list(self, ctx: AuthContext, page: int = 1, page_size: int = 20, shared_only: bool = False,
-                   kb_type: str | None = None) -> tuple[list[dict], int]:
+                   kb_type: str | None = None, include_removing: bool = False) -> tuple[list[dict], int]:
+        """The KBs the principal can read; with `include_removing` also their own being removed
+        (status removing / purging), for the page to show until the delete task is done."""
+        live = KnowledgeBase.deleted_at.is_(None)
+        if include_removing:
+            live = sa.or_(live, sa.and_(KnowledgeBase.status.in_(REMOVING), KnowledgeBase.owner_subject == ctx.subject))
         async with async_session_scope(commit=False) as session:
-            query = sa.select(KnowledgeBase).where(KnowledgeBase.deleted_at.is_(None),
-                                                   access.visible_clause(KnowledgeBase, ctx))
+            query = sa.select(KnowledgeBase).where(live, access.visible_clause(KnowledgeBase, ctx))
             if shared_only:
                 query = query.where(KnowledgeBase.owner_subject != ctx.subject)
             if kb_type:
@@ -286,7 +332,8 @@ class KnowledgeBaseService:
             rows = list((await session.execute(query.order_by(KnowledgeBase.is_pinned.desc(), KnowledgeBase.created_at)
                                                .offset((page - 1) * page_size).limit(page_size))).scalars())
             counts = await self._knowledge_counts(session, ctx, [kb.id for kb in rows])
-            return [kb_dict(kb, counts.get(kb.id, 0)) for kb in rows], total
+            names = await group_names(session, rows)
+            return [kb_dict(kb, counts.get(kb.id, 0), names) for kb in rows], total
 
     @staticmethod
     async def _knowledge_counts(session, ctx, kb_ids) -> dict[str, int]:
@@ -301,13 +348,15 @@ class KnowledgeBaseService:
         async with async_session_scope(commit=False) as session:
             kb = await self.load(session, ctx, ref)
             counts = await self._knowledge_counts(session, ctx, [kb.id])
-            return kb_dict(kb, counts.get(kb.id, 0))
+            return kb_dict(kb, counts.get(kb.id, 0), await group_names(session, [kb]))
 
     async def _check_models(self, ctx: AuthContext, body: dict) -> dict:
         out = {}
         for field, mtype in (("embedding_model_id", "Embedding"), ("rerank_model_id", "Rerank"),
                              ("summary_model_id", "KnowledgeQA")):
-            if body.get(field):
+            if body.get(field) == "default":         # the deployment's default model of the kind
+                out[field] = await self.models.default_id(mtype)
+            elif body.get(field):
                 out[field] = await self.models.usable(ctx, body[field], mtype)
         return out
 
@@ -348,6 +397,15 @@ class KnowledgeBaseService:
         models = await self._check_models(ctx, body)
         models.setdefault("embedding_model_id", await self.models.default_id("Embedding"))
         models.setdefault("rerank_model_id", await self.models.default_id("Rerank"))
+        question_config = dict(body.get("question_generation_config") or {})
+        if kb_type == "document":
+            # Enrichment that helps retrieval (docs/ingestion.md, Post-processing): a summary per
+            # document, and questions per chunk, which match how people ask rather than how the
+            # document is written.
+            if "summary_model_id" not in body and features.kb_default("summaries"):
+                models["summary_model_id"] = await self.models.default_id("KnowledgeQA")
+            if "enabled" not in question_config and features.kb_default("question_generation"):
+                question_config = {"enabled": True, "question_count": 3, **question_config}
         defaults = document_defaults(owner) if kb_type == "document" else \
             {"indexing_strategy": default_indexing_strategy(), "memory_config": {}}
         strategy = {**defaults["indexing_strategy"], **(body.get("indexing_strategy") or {})}
@@ -378,7 +436,7 @@ class KnowledgeBaseService:
                                freshness_config=body.get("freshness_config") or {},
                                records_config=body.get("records_config") or {}, wiki_config=body.get("wiki_config") or {},
                                memory_config={**defaults["memory_config"], **(body.get("memory_config") or {})},
-                               **models)
+                               question_generation_config=question_config, **models)
             session.add(kb)
             await session.flush()
             return kb_dict(kb, 0)
@@ -396,6 +454,9 @@ class KnowledgeBaseService:
                     raise Conflict("the embedding model is fixed once the KB has knowledge; use /reindex")
             for field, value in models.items():
                 setattr(kb, field, value)
+            for field in ("summary_model_id", "rerank_model_id"):     # "" or null: none (no summaries; the default reranker)
+                if field in body and not body[field]:
+                    setattr(kb, field, None)
             for field in UPDATABLE:
                 if field in body and body[field] is not None:
                     value = body[field]
@@ -429,28 +490,104 @@ class KnowledgeBaseService:
             return kb_dict(kb)
 
     async def delete(self, ctx: AuthContext, ref: str, purge: bool = False) -> None:
-        """Soft delete (purged by housekeeping after `purge_after_days`), or with `purge` (or
-        `[maintenance] purge_on_delete`) every row of the KB at once."""
+        """Delete a KB: status removing (its empty row is purged by housekeeping after
+        `purge_after_days`) or, with `purge` (or `[maintenance] purge_on_delete`), purging (every
+        row goes). The rows and files are removed by the knowledge_base:delete task."""
         from agenticwf.kb.runtime.services.knowledge import purge_on_delete
 
-        async with async_session_scope() as session:
-            kb = await self.load(session, ctx, ref, for_update=True)
-            if not access.can_manage(ctx, kb):
-                raise Forbidden("only the owner deletes a knowledge base")
-            now = utcnow()
-            await session.execute(sa.delete(Embedding).where(Embedding.knowledge_base_id == kb.id))
-            await session.execute(sa.delete(Chunk).where(Chunk.knowledge_base_id == kb.id))
-            if self.memory is not None:
-                ids = list((await session.execute(sa.select(Knowledge.id).where(
-                    Knowledge.knowledge_base_id == kb.id))).scalars())
-                await self.memory.forget_documents(session, kb.owner_subject, ids)
-            await session.execute(sa.update(Knowledge).where(Knowledge.knowledge_base_id == kb.id,
-                                                             Knowledge.deleted_at.is_(None))
-                                  .values(deleted_at=now, parse_status="deleted", description="", meta={},
-                                          citation={}, profile={}))
-            kb.deleted_at, kb.storage_used = now, 0
-            owner = kb.owner_subject
-            kb_id = kb.id
-            if purge or purge_on_delete():
+        # The request changes the KB row only: status removing / purging and deleted_at, which hide
+        # the KB, its items and their passages from every list, read and search at once. It never
+        # touches the items, chunks or index rows (a big KB has many, and other jobs may hold some):
+        # the delete task removes those in small batches, and maint:kb_removal queues the task again
+        # until it is done. Only the KB row's lock is waited for, briefly.
+        try:
+            async with async_session_scope() as session:
+                await session.execute(sa.text(f"SET LOCAL lock_timeout = '{REQUEST_LOCK_TIMEOUT}'"))
+                kb = await self.load(session, ctx, ref)
+                if not access.can_manage(ctx, kb):
+                    raise Forbidden("only the owner deletes a knowledge base")
+                status = "purging" if purge or purge_on_delete() else "removing"
+                await session.execute(sa.update(KnowledgeBase).where(
+                    KnowledgeBase.id == kb.id, KnowledgeBase.deleted_at.is_(None)).values(
+                    deleted_at=utcnow(), status=status, storage_used=0, updated_at=utcnow()))
+                await enqueue_removal(session, kb)
+        except DatabaseException as exc:
+            if lock_timed_out(exc):
+                raise Conflict("the knowledge base is busy (a job holds it, e.g. its wiki is being updated): "
+                               "try again in a minute") from exc
+            raise
+
+    def handlers(self) -> dict:
+        from agenticwf.kb.runtime.tasks.runner import HandlerSpec
+
+        return {DELETE_TASK: HandlerSpec(run=self._delete_task, timeout=3600)}
+
+    async def _delete_task(self, ctx) -> None:
+        """The rest of a KB's removal, each step in short transactions of at most DELETE_BATCH rows,
+        so a big KB never holds many locks and other jobs are not held up: its queued work is
+        cancelled, its items marked deleted (rows another job holds are skipped and taken on a
+        later pass), the memory they fed forgotten, their index rows and chunks deleted, its files
+        removed; then status removed, or with purging every row. A step that cannot get its locks
+        in time fails the task, which is retried later (and queued again by maint:kb_removal)."""
+        kb_id = ctx.payload["knowledge_base_id"]
+        async with async_session_scope(commit=False) as session:
+            kb = await session.get(KnowledgeBase, kb_id)
+            if kb is None or kb.status not in REMOVING:   # purged or removed already
+                return
+            owner, purge = kb.owner_subject, kb.status == "purging"
+
+        async def step(statement) -> int:
+            async with async_session_scope() as session:
+                await session.execute(sa.text(f"SET LOCAL lock_timeout = '{TASK_LOCK_TIMEOUT}'"))
+                return await statement(session)
+
+        async def cancel_queued(session) -> int:
+            result = await session.execute(sa.update(Task).where(Task.knowledge_base_id == kb_id,
+                                                                 Task.status == "queued")
+                                           .values(status="cancelled", error="knowledge base deleted"))
+            return result.rowcount or 0
+
+        async def mark_items(session) -> int:
+            ids = list((await session.execute(sa.select(Knowledge.id).where(
+                Knowledge.knowledge_base_id == kb_id, Knowledge.deleted_at.is_(None))
+                .limit(DELETE_BATCH).with_for_update(skip_locked=True))).scalars())
+            if ids:
+                if self.memory is not None:
+                    await self.memory.forget_documents(session, owner, ids)
+                await session.execute(sa.update(Knowledge).where(Knowledge.id.in_(ids)).values(
+                    deleted_at=utcnow(), parse_status="deleted", description="", meta={}, citation={}, profile={}))
+            return len(ids)
+
+        async def items_left(session) -> int:
+            return (await session.execute(sa.select(sa.func.count()).select_from(Knowledge).where(
+                Knowledge.knowledge_base_id == kb_id, Knowledge.deleted_at.is_(None)))).scalar_one()
+
+        def delete_batch(model):
+            async def run(session) -> int:
+                ids = list((await session.execute(sa.select(model.id).where(
+                    model.knowledge_base_id == kb_id).limit(DELETE_BATCH))).scalars())
+                if ids:
+                    await session.execute(sa.delete(model).where(model.id.in_(ids)))
+                return len(ids)
+            return run
+
+        async def finish(session) -> int:
+            if purge:
                 await purge_kb_rows(session, kb_id)
-        self.storage.delete_prefix(f"{owner_scope(owner)}/{kb_id}")
+            else:
+                await session.execute(sa.update(KnowledgeBase).where(KnowledgeBase.id == kb_id)
+                                      .values(status="removed"))
+            return 1
+
+        await step(cancel_queued)
+        while await step(mark_items):
+            pass
+        if await step(items_left):      # held by a job right now (a document being processed): next time
+            raise RuntimeError("some items are busy; the removal goes on when the task runs again")
+        for model in (Embedding, Chunk):
+            while await step(delete_batch(model)):
+                pass
+        import anyio
+
+        await anyio.to_thread.run_sync(self.storage.delete_prefix, f"{owner_scope(owner)}/{kb_id}")
+        await step(finish)

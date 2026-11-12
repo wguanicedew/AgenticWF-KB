@@ -68,6 +68,10 @@ def test_purging_a_knowledge_base_erases_every_row(client, alice):
     other = alice.post("/kb/api/v1/knowledge-bases", json={"name": "Other"}).json()["data"]["id"]
     response = alice.delete(f"/kb/api/v1/knowledge-bases/{kb}?purge=true")
     assert response.status_code == 200 and response.json()["data"]["purged"] is True
+    listed = alice.get("/kb/api/v1/knowledge-bases?include_removing=true").json()["data"]
+    assert [k["status"] for k in listed if k["id"] == kb] == ["purging"]          # shown until the task is done
+    assert kb not in [k["id"] for k in alice.get("/kb/api/v1/knowledge-bases").json()["data"]]
+    drain(client)                                                                  # the delete task
     for table in ("kb_knowledges", "kb_knowledge_tags", "kb_wiki_pages", "kb_embeddings", "kb_chunks", "kb_sites"):
         assert not rows(f"SELECT 1 FROM {table} WHERE knowledge_base_id = :k", k=kb), table
     assert not rows("SELECT 1 FROM kb_knowledge_bases WHERE id = :k", k=kb)
@@ -77,9 +81,18 @@ def test_purging_a_knowledge_base_erases_every_row(client, alice):
 def test_housekeeping_purges_deleted_knowledge_bases(client, alice):
     kb, item, _ = setup_kb(client, alice)
     alice.delete(f"/kb/api/v1/knowledge-bases/{kb}")
-    assert rows("SELECT 1 FROM kb_knowledge_bases WHERE id = :k", k=kb)          # soft-deleted, kept for now
-    assert rows("SELECT description FROM kb_knowledges WHERE id = :i", i=item["id"])[0][0] == ""
+    assert rows("SELECT status FROM kb_knowledge_bases WHERE id = :k", k=kb) == [("removing",)]
     freshness = client.app.state.manager.services.freshness
+    with get_engine().begin() as conn:                                             # its task failed for good
+        conn.execute(sa.text("UPDATE kb_tasks SET status = 'failed' WHERE type = 'knowledge_base:delete'"))
+    assert asyncio.run(freshness._kb_removal()) == 1                               # the periodic job queues it again
+    asyncio.run(dispose_async_engine())
+    assert asyncio.run(freshness._kb_removal()) == 0                               # once
+    asyncio.run(dispose_async_engine())
+    drain(client)
+    assert not rows("SELECT 1 FROM kb_embeddings WHERE knowledge_base_id = :k", k=kb)
+    assert rows("SELECT status FROM kb_knowledge_bases WHERE id = :k", k=kb) == [("removed",)]  # kept for now
+    assert rows("SELECT description FROM kb_knowledges WHERE id = :i", i=item["id"])[0][0] == ""
 
     async def run(**kw):
         try:
@@ -112,3 +125,50 @@ def test_purging_a_site_and_its_pages(client, alice, monkeypatch):
     assert result["pages_deleted"] == 1
     assert not rows("SELECT 1 FROM kb_sites WHERE id = :s", s=site_id)
     assert not rows("SELECT 1 FROM kb_knowledges WHERE id = :p", p=page_id)
+
+
+def test_deleting_a_busy_knowledge_base_answers_conflict_quickly(client, alice):
+    import time
+
+    kb, _, _ = setup_kb(client, alice)
+    with get_engine().connect() as conn:          # another job holds the KB (a wiki finalize, a reindex)
+        trans = conn.begin()
+        conn.execute(sa.text("SELECT 1 FROM kb_knowledge_bases WHERE id = :k FOR UPDATE"), {"k": kb})
+        started = time.monotonic()
+        response = alice.delete(f"/kb/api/v1/knowledge-bases/{kb}")
+        waited = time.monotonic() - started
+        trans.rollback()
+    assert response.status_code == 409 and "busy" in response.text and waited < 15
+    assert alice.delete(f"/kb/api/v1/knowledge-bases/{kb}").status_code == 200      # free again: deleted
+    drain(client)
+    assert not rows("SELECT 1 FROM kb_chunks WHERE knowledge_base_id = :k", k=kb)
+
+
+def test_removal_skips_items_another_job_holds_and_finishes_later(client, alice):
+    from types import SimpleNamespace
+
+    kb, item, manual = setup_kb(client, alice)
+    assert alice.delete(f"/kb/api/v1/knowledge-bases/{kb}").status_code == 200
+    kbs = client.app.state.manager.services.knowledge_bases
+    task = SimpleNamespace(payload={"knowledge_base_id": kb})
+
+    async def run():
+        try:
+            await kbs._delete_task(task)
+        finally:
+            await dispose_async_engine()
+
+    with get_engine().connect() as conn:          # a document being processed holds its row
+        trans = conn.begin()
+        conn.execute(sa.text("SELECT 1 FROM kb_knowledges WHERE id = :i FOR UPDATE"), {"i": item["id"]})
+        with pytest.raises(RuntimeError, match="busy"):
+            asyncio.run(run())
+        trans.rollback()
+    assert rows("SELECT deleted_at IS NOT NULL FROM kb_knowledges WHERE id = :i", i=manual["id"]) == [(True,)]
+    assert rows("SELECT deleted_at IS NULL FROM kb_knowledges WHERE id = :i", i=item["id"]) == [(True,)]
+    assert rows("SELECT status FROM kb_knowledge_bases WHERE id = :k", k=kb) == [("removing",)]
+    asyncio.run(run())                            # the next run takes the rest
+    assert rows("SELECT status FROM kb_knowledge_bases WHERE id = :k", k=kb) == [("removed",)]
+    assert not rows("SELECT 1 FROM kb_embeddings WHERE knowledge_base_id = :k", k=kb)
+    assert not rows("SELECT 1 FROM kb_knowledges WHERE knowledge_base_id = :k AND deleted_at IS NULL", k=kb)
+    drain(client)

@@ -258,7 +258,9 @@ def test_knowledge_bases_section_sets_what_a_new_document_kb_starts_with(client,
     on = {("knowledge_bases", "wiki_enabled"): "true", ("knowledge_bases", "memory_enabled"): "yes"}
     monkeypatch.setattr(features, "config_has_option", lambda s, o: (s, o) in on or has(s, o))
     monkeypatch.setattr(features, "config_get", lambda s, o: on.get((s, o)) or get(s, o))
-    assert ok(alice.get("/kb/api/v1/system/info"))["kb_defaults"] == {"wiki_enabled": True, "memory_enabled": True}
+    assert ok(alice.get("/kb/api/v1/system/info"))["kb_defaults"] == {
+        "wiki_enabled": True, "memory_enabled": True, "summaries": False, "question_generation": False,
+        "contextual": False}
     kb = ok(alice.post("/kb/api/v1/knowledge-bases", json={"name": "Defaults"}), 201)
     assert kb["indexing_strategy"]["wiki_enabled"] is True and kb["memory_config"]["enabled"] is True
     off = ok(alice.post("/kb/api/v1/knowledge-bases", json={

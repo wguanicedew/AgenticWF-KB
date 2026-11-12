@@ -326,3 +326,29 @@ def test_wiki_preset_reads_pages_and_cites_sources(client, alice):
     read = [m["content"] for m in fake.calls[2]["messages"] if m["role"] == "tool"][1]
     assert '<wiki_page id="p1" slug="entity/rucio"' in read and '<source id="c1" doc="d1"' in read
     assert '<wiki slug="entity/rucio"' in data["answer"] and "<kb doc=" in data["answer"]
+
+
+def test_wiki_related_follows_the_graph(client, alice):
+    from test_agentic import ScriptedChat, call
+
+    kb_id, model = wiki_kb(alice)
+    upload(alice, kb_id, "Rucio", "# Rucio\n\nRucio places data on storage sites.\n\nIt uses rules.")
+    drain(client)
+    [rel] = ok(alice.get(W.format(kb_id) + "/relations"))[:1]
+    fake = ScriptedChat([{"tool_calls": [call("wiki_related", slugs=[rel["source"]], hops=2)]},
+                         {"tool_calls": [call("wiki_related", slugs=[rel["source"]], relation="nothing-like-it")]},
+                         {"content": "done"}])
+
+    async def chat(ref):
+        return fake
+
+    client.app.state.manager.services.models.chat = chat
+    ok(alice.post("/kb/api/v1/agentic-search", json={"query": "what does rucio use", "preset": "wiki",
+                                                     "knowledge_base_ids": [kb_id], "model_id": model}))
+    outputs = [m["content"] for m in fake.calls[2]["messages"] if m["role"] == "tool"]
+    graph = outputs[0]
+    assert f'<relation source="{rel["source"]}" source_page="p' in graph
+    assert f'relation="uses" target="{rel["target"]}" target_page="p' in graph
+    assert '<source id="c1">' in graph and "<pages>" in graph            # the passage stating it, citable
+    assert outputs[1].startswith("No relations recorded around")          # the relation filter
+    assert "wiki_related" in fake.calls[0]["messages"][0]["content"]      # the wiki preset tells when to use it

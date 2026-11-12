@@ -728,7 +728,10 @@ class WikiService:
         await self.ensure_index(kb_id)
         report = {"dead_links": 0, "cross_links": 0, "folders_pruned": 0, "communities_changed": 0}
         async with async_session_scope() as session:
-            kb = await session.get(KnowledgeBase, kb_id, with_for_update=True)
+            # one finalize per KB at a time, without locking the KB row (deleting or changing the KB
+            # must not wait for a finalize); the pages it rewrites are locked below
+            await session.execute(sa.text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"wiki-finalize:{kb_id}"})
+            kb = await session.get(KnowledgeBase, kb_id)
             if kb is None or kb.deleted_at is not None:
                 return report
             pages = list((await session.execute(sa.select(WikiPage).where(

@@ -250,6 +250,8 @@ def _sections(text: str, start: int, end: int, titles: list[tuple[int, int, str]
 
 
 def resolve_strategy(text: str, strategy: str) -> str:
+    if strategy == "semantic":          # needs embeddings (ingestion.semantic); here: by structure
+        strategy = "auto"
     if strategy not in STRATEGIES:
         return "legacy"
     if strategy != "auto":

@@ -30,7 +30,7 @@ LOG = get_logger(__name__)
 KINDS = {"chat": "KnowledgeQA", "embedding": "Embedding", "rerank": "Rerank", "vlm": "VLLM"}
 DEFAULT_OPTIONS = {"Embedding": "default_embedding", "KnowledgeQA": "default_chat", "Rerank": "default_rerank",
                    "VLLM": "default_vlm"}
-PROVIDERS = ("openai_compat", "hash")
+PROVIDERS = ("openai_compat", "hash", "llm", "tei")   # rerank: llm (a chat model grades), tei (text-embeddings-inference)
 MASK = "******"
 SYSTEM_NAMESPACE = uuid.UUID("6f1e0c39-6a0f-4c9a-9a51-6d1b7b0b1a01")
 

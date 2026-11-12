@@ -99,8 +99,11 @@ def chunk_dict(c: Chunk) -> dict:
             "created_at": _iso(c.created_at), "updated_at": _iso(c.updated_at)}
 
 
-def index_text(title: str, context_header: str, content: str) -> str:
-    return (title + "\n" if title else "") + (context_header + "\n\n" if context_header else "") + content.strip()
+def index_text(title: str, context_header: str, content: str, context: str = "") -> str:
+    """What is embedded and keyword-indexed for a chunk: the title, the heading breadcrumb, the
+    model-written context (contextual chunking), then the content."""
+    return ((title + "\n" if title else "") + (context_header + "\n" if context_header else "")
+            + (context + "\n" if context else "") + ("\n" if context_header or context else "") + content.strip())
 
 
 async def event(session, item: Knowledge, payload: dict) -> None:
@@ -485,13 +488,13 @@ class KnowledgeService:
         if item.type == "url" and metadata.get("title") and title in ("", item.source):
             title = metadata["title"]
 
-        pieces = await anyio.to_thread.run_sync(lambda: chunker.chunk(markdown, kb.chunking_config,
-                                                                      _default_strategy()))
+        pieces = await self._chunk(kb, markdown)
         pages = list(metadata.pop("pages", None) or [])          # page / slide start offsets
         headings = citation.heading_index(markdown)              # sections, whatever the chunking strategy
         chunk_ids = [new_id() for _ in pieces]
         indexed = [i for i, p in enumerate(pieces) if p.chunk_type == "text"]
-        texts = [index_text(title, pieces[i].context_header, pieces[i].content) for i in indexed]
+        contexts = await self._contexts(kb, title, markdown, pieces, indexed)
+        texts = [index_text(title, pieces[i].context_header, pieces[i].content, contexts.get(i, "")) for i in indexed]
 
         vectors: list[list[float]] | None = None
         dimension = 0
@@ -521,7 +524,7 @@ class KnowledgeService:
                     next_chunk_id=chunk_ids[i + 1] if i + 1 < len(pieces) else "",
                     parent_chunk_id=chunk_ids[piece.parent] if piece.parent is not None else "",
                     context_header=piece.context_header, status=2,
-                    meta=_location(pages, headings, piece))
+                    meta={**_location(pages, headings, piece), **({"context": contexts[i]} if i in contexts else {})})
                 session.add(row)
                 chunk_rows.append(row)
             await session.flush()
@@ -561,6 +564,40 @@ class KnowledgeService:
             await event(session, current, {"type": "knowledge_status", "parse_status": current.parse_status,
                                            "chunks": len(pieces)})
         LOG.info("processed %s: %d chunks, %d indexed, %d subtasks", knowledge_id, len(pieces), len(indexed), subtasks)
+
+    async def _chunk(self, kb, markdown: str):
+        """The document's chunks: by meaning (`strategy: semantic`, with the KB's embedding model,
+        ingestion.semantic), else by structure (ingestion.chunker)."""
+        from agenticwf.kb.runtime.ingestion import semantic
+
+        strategy = (kb.chunking_config or {}).get("strategy") or _default_strategy()
+        if strategy == semantic.STRATEGY and kb.embedding_model_id and kb.indexing_strategy.get("vector_enabled", True):
+            try:
+                embedder = await self.models.embedder(kb.embedding_model_id)
+            except ModelError as exc:
+                LOG.warning("semantic chunking skipped: %s", exc)
+            else:
+                return await semantic.chunk(markdown, kb.chunking_config, embedder.embed, _default_strategy())
+        return await anyio.to_thread.run_sync(lambda: chunker.chunk(markdown, kb.chunking_config, _default_strategy()))
+
+    async def _contexts(self, kb, title: str, markdown: str, pieces, indexed: list[int]) -> dict[int, str]:
+        """Contextual chunking (`indexing_strategy.contextual_enabled`): {piece index: context}, by
+        the KB's summary model or the default chat model; {} when off or no model is usable."""
+        if not kb.indexing_strategy.get("contextual_enabled") or not indexed:
+            return {}
+        model_id = kb.summary_model_id or await self.models.default_id("KnowledgeQA")
+        if not model_id:
+            return {}
+        try:
+            chat = await self.models.chat(model_id)
+        except ModelError as exc:
+            LOG.warning("contextual chunking skipped: %s", exc)
+            return {}
+        from agenticwf.kb.runtime.ingestion.contextual import chunk_contexts
+
+        found = await chunk_contexts(chat, title, markdown, [(pieces[i].start, pieces[i].end, pieces[i].content)
+                                                             for i in indexed])
+        return {i: c for i, c in zip(indexed, found) if c}
 
     # -- reading ---------------------------------------------------------------------------------------
     async def list(self, ctx: AuthContext, kb_ref: str, page: int = 1, page_size: int = 20,
@@ -1009,7 +1046,8 @@ class KnowledgeService:
             if row is None or row.knowledge_id != knowledge_id:
                 raise NotFound("chunk not found")
             new_content = body.get("content")
-            text = index_text(item.title, row.context_header, new_content) if new_content else None
+            text = index_text(item.title, row.context_header, new_content, (row.meta or {}).get("context", "")) \
+                if new_content else None
             embedding_model = item.embedding_model_id
         if text is not None and embedding_model:
             try:

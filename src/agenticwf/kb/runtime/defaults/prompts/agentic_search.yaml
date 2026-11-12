@@ -49,6 +49,8 @@ wiki: |
 
   How to work:
   - Start with wiki_search, then wiki_read_page on the relevant pages.
+  - For questions that connect things (what depends on, caused, uses or replaced what), follow
+    the relations with wiki_related from the pages you found, then read the pages it reaches.
   - For questions about the whole corpus (themes, overall risks, what the documents cover),
     use wiki_global_search.
   - Before you rely on a detail, confirm it on the page's source passages (cN) with

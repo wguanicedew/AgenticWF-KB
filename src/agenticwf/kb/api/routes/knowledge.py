@@ -53,9 +53,10 @@ async def create_kb(body: dict[str, Any] = Body(...), thread: KBThread = Depends
 
 
 @router.get("/knowledge-bases")
-async def list_kbs(page: int = 1, page_size: int = 20, type: str | None = None, thread: KBThread = Depends(READ)):
+async def list_kbs(page: int = 1, page_size: int = 20, type: str | None = None, include_removing: bool = False,
+                   thread: KBThread = Depends(READ)):
     page, page_size = page_args(page, page_size)
-    items, total = await thread.list_kbs(page, page_size, kb_type=type)
+    items, total = await thread.list_kbs(page, page_size, kb_type=type, include_removing=include_removing)
     return ok_list(items, total, page, page_size)
 
 

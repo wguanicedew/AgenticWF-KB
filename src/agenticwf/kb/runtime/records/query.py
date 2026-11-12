@@ -13,6 +13,7 @@ SQL returns the same rows.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import json
 import math
@@ -27,6 +28,26 @@ FNS = ("count", "sum", "avg", "min", "max", "p50", "p90", "p99", "stddev", "coun
 BUCKETS = ("hour", "day", "week", "month", "quarter", "year")
 MAX_DEPTH = 8
 MAX_LEAVES = 64
+
+
+# Ops whose value says which type of a union field to compare as.
+TYPED_OPS = ("eq", "ne", "lt", "lte", "gt", "gte", "between", "in", "nin", "near")
+
+
+def narrow(info: FieldInfo, op: str, value) -> FieldInfo:
+    """A union-typed field (e.g. hpo `metadata.<key>`: string | number | boolean) as the type of
+    the filter value: a number compares numerically and a boolean as a boolean, matching only
+    records that store that type; anything else compares as the field's first type, as before."""
+    if len(info.alternatives) < 2 or op not in TYPED_OPS:
+        return info
+    sample = value[0] if isinstance(value, list) and value else value
+    if isinstance(sample, bool):
+        kind = "boolean" if "boolean" in info.alternatives else None
+    elif isinstance(sample, (int, float)):
+        kind = next((t for t in ("number", "integer") if t in info.alternatives), None)
+    else:
+        kind = None
+    return dataclasses.replace(info, type=kind) if kind and kind != info.type else info
 
 
 @dataclass
@@ -123,7 +144,7 @@ class Compiler:
         if op not in OPS:
             raise Invalid(f"op must be one of {', '.join(OPS)}")
         scope = "items" if in_items else "record"
-        info = self.resolve(node.get("field"), scope)
+        info = narrow(self.resolve(node.get("field"), scope), op, node.get("value"))
         alias = (self.item_alias or "i") if in_items else "r"
         expr = self.expr(info, alias)
         if info.type == "string" and not info.temporal and op in ("lt", "lte", "gt", "gte", "between"):
@@ -389,8 +410,8 @@ def _eval(typedef, node, record, event_time, items, in_items):
         return None if any(v is None for v in values) else False
     if "not" in node:
         return not bool(_eval(typedef, node["not"], record, event_time, items, in_items))
-    info = typedef.field(node["field"], "items" if in_items else "record")
     op, value = node["op"], node.get("value")
+    info = narrow(typedef.field(node["field"], "items" if in_items else "record"), op, value)
     actual = _field_value(typedef, info, record, None if in_items else event_time)
     if op == "exists":
         present = (event_time is not None) if (not in_items and info.path == typedef.roles["time"]) else \

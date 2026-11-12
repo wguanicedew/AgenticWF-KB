@@ -101,3 +101,49 @@ def test_merge_drops_fully_covered_contexts():
     a = {**_chunk(0, 0, 10, "a" * 10), "score": 0.9, "chunk_type": "faq"}
     contexts = merge([a, {**a, "score": 0.1}], lambda cid: None)
     assert len(contexts) == 1
+
+
+def test_llm_rerank_scores_parse():
+    from agenticwf.kb.runtime.models.clients import ModelError, parse_llm_scores
+
+    assert parse_llm_scores('<think>hmm</think>{"scores": [10, 0, 5]}', 3) == [1.0, 0.0, 0.5]
+    assert parse_llm_scores("Scores:\n[7, 12, -1]", 3) == [0.7, 1.0, 0.0]      # clamped to 0-10
+    with pytest.raises(ModelError):
+        parse_llm_scores('{"scores": [1, 2]}', 3)                             # not one per passage
+    with pytest.raises(ModelError):
+        parse_llm_scores("I cannot grade these.", 2)
+
+
+def test_llm_reranker_grades_head_and_zeroes_tail(monkeypatch):
+    from agenticwf.kb.runtime.models import clients
+
+    sent = {}
+
+    async def fake_post(spec, path, body, timeout):
+        sent.update(path=path, body=body)
+        import re
+        n = len(re.findall(r"^\[\d+\] ", body["messages"][0]["content"], re.M))
+        return {"choices": [{"message": {"content": '{"scores": [%s]}' % ", ".join(["8"] * n)}}]}
+
+    monkeypatch.setattr(clients, "_post", fake_post)
+    monkeypatch.setattr(clients, "LLM_RERANK_MAX", 2)
+    spec = clients.ModelSpec(id="r", name="qwen", type="Rerank", provider="llm")
+    scores = asyncio.run(clients.Reranker(spec).rerank("what is X?", ["X is a detector", "Y", "Z"]))
+    assert sent["path"] == "/chat/completions" and sent["body"]["temperature"] == 0
+    assert scores == [0.8, 0.8, 0.0]
+
+
+def test_tei_reranker_request_shape(monkeypatch):
+    from agenticwf.kb.runtime.models import clients
+
+    sent = {}
+
+    async def fake_post(spec, path, body, timeout):
+        sent.update(path=path, body=body)
+        return [{"index": 1, "score": 0.9}, {"index": 0, "score": 0.2}]       # TEI answers a bare list
+
+    monkeypatch.setattr(clients, "_post", fake_post)
+    spec = clients.ModelSpec(id="r", name="BAAI/bge-reranker-v2-m3", type="Rerank", provider="tei")
+    assert asyncio.run(clients.Reranker(spec).rerank("q", ["a", "b"])) == [0.2, 0.9]
+    assert sent["path"] == "/rerank" and sent["body"] == {"query": "q", "texts": ["a", "b"], "truncate": True,
+                                                         "raw_scores": False}

@@ -51,8 +51,18 @@ class _Visible:
 
 
 def default_chunking_config() -> dict:
-    return {"chunk_size": 512, "chunk_overlap": 50, "separators": ["\n\n", "\n", "。"], "strategy": "",
-            "token_limit": 0, "enable_parent_child": False, "parent_chunk_size": 4096, "child_chunk_size": 384}
+    """A new KB's chunking: `[ingestion]` chunk_size, chunk_overlap, enable_parent_child,
+    parent_chunk_size, child_chunk_size where set (docs/ingestion.md, Chunker)."""
+    from agenticwf.kb.core.common.config import config_get, config_has_option
+
+    out = {"chunk_size": 512, "chunk_overlap": 50, "separators": ["\n\n", "\n", "。"], "strategy": "",
+           "token_limit": 0, "enable_parent_child": False, "parent_chunk_size": 4096, "child_chunk_size": 384}
+    for key in ("chunk_size", "chunk_overlap", "parent_chunk_size", "child_chunk_size", "token_limit"):
+        if config_has_option("ingestion", key):
+            out[key] = int(config_get("ingestion", key))
+    if config_has_option("ingestion", "enable_parent_child"):
+        out["enable_parent_child"] = config_get("ingestion", "enable_parent_child").strip().lower() in ("1", "true", "yes", "on")
+    return out
 
 
 def default_indexing_strategy() -> dict:
@@ -91,6 +101,10 @@ class KnowledgeBase(BASE, ModelBase, _Owned, _Visible):
     is_temporary = Column(Boolean, nullable=False, default=False)
     storage_used = Column(BigInteger, nullable=False, default=0)
     storage_quota = Column(BigInteger, nullable=False, default=10 * GIB)
+    # active | removing / purging (deleted; the knowledge_base:delete task is removing its rows and
+    # files, queued again by maint:kb_removal until done; purging: the KB row goes too) | removed
+    # (only this row is left until housekeeping purges it)
+    status = Column(String(16), nullable=False, default="active", server_default="active")
     deleted_at = _ts(nullable=True)
 
     __table_args__ = (

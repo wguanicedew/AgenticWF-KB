@@ -253,7 +253,7 @@ def test_scope_and_presets(client, alice):
     assert "Pilot docs" not in fake.calls[0]["messages"][0]["content"]
     assert data["evidence"] == [] and "No results" in tool_output(fake, 1)[0]
     presets = {p["name"]: p for p in alice.get("/kb/api/v1/agentic-search/presets").json()["data"]}
-    assert presets["deep"]["tools"] == ["wiki_search", "wiki_read_page", "wiki_global_search", "search_knowledge",
+    assert presets["deep"]["tools"] == ["wiki_search", "wiki_read_page", "wiki_related", "wiki_global_search", "search_knowledge",
                                         "grep_knowledge", "list_documents", "read_document", "describe_record_types",
                                         "query_records", "aggregate_records", "find_similar_records", "recall",
                                         "memory_history", "thinking", "todo_write", "suggest_initial_points"]

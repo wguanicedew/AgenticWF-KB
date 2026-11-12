@@ -28,10 +28,11 @@ from agenticwf.auth.context import AuthContext
 from agenticwf.kb.core.common.config import config_get, config_has_option
 from agenticwf.kb.core.common.logging import get_logger
 from agenticwf.kb.core.orm.base.session import async_session_scope
-from agenticwf.kb.core.orm.models.kb import Chunk, Embedding, Knowledge, KnowledgeBase, KnowledgeConflict, utcnow
+from agenticwf.kb.core.orm.models.kb import Chunk, Embedding, Knowledge, KnowledgeBase, KnowledgeConflict, Task, utcnow
 from agenticwf.kb.runtime import access
 from agenticwf.kb.runtime.errors import Forbidden, Invalid, NotFound
-from agenticwf.kb.runtime.services.knowledge_bases import KnowledgeBaseService, purge_kb_rows
+from agenticwf.kb.runtime.services.knowledge_bases import (DELETE_TASK, REMOVING, KnowledgeBaseService, enqueue_removal,
+                                                           purge_kb_rows)
 from agenticwf.kb.runtime.storage import owner_scope
 from agenticwf.kb.runtime.tasks import queue
 from agenticwf.kb.runtime.tasks.runner import HandlerSpec, ScheduleSpec, TaskContext
@@ -48,7 +49,8 @@ def _maintenance(option: str, default: int) -> int:
 def schedules() -> tuple[ScheduleSpec, ...]:
     return (ScheduleSpec("expire", _maintenance("expire_interval_seconds", 3600), "maint:expire"),
             ScheduleSpec("refresh_scan", _maintenance("refresh_scan_seconds", 60), "maint:refresh_scan"),
-            ScheduleSpec("housekeeping", _maintenance("housekeeping_interval_hours", 24) * 3600, "maint:housekeeping"))
+            ScheduleSpec("housekeeping", _maintenance("housekeeping_interval_hours", 24) * 3600, "maint:housekeeping"),
+            ScheduleSpec("kb_removal", _maintenance("kb_removal_seconds", 300), "maint:kb_removal"))
 
 
 def conflict_dict(c: KnowledgeConflict, titles: dict[str, str]) -> dict:
@@ -69,7 +71,24 @@ class FreshnessService:
     def handlers(self) -> dict[str, HandlerSpec]:
         return {"maint:expire": HandlerSpec(self._expire, 600),
                 "maint:refresh_scan": HandlerSpec(self._refresh_scan, 120),
-                "maint:housekeeping": HandlerSpec(self._housekeeping_task, 1800)}
+                "maint:housekeeping": HandlerSpec(self._housekeeping_task, 1800),
+                "maint:kb_removal": HandlerSpec(self._kb_removal, 120)}
+
+    async def _kb_removal(self, ctx: TaskContext | None = None) -> int:
+        """Queue the delete task again for every KB still being removed (status removing or
+        purging) that has none queued or running: its task failed for good, or was lost. Returns
+        how many were queued."""
+        active = sa.exists().where(Task.type == DELETE_TASK, Task.status.in_(("queued", "running")),
+                                   Task.payload["knowledge_base_id"].astext == KnowledgeBase.id)
+        queued = 0
+        async with async_session_scope() as session:
+            for kb in (await session.execute(sa.select(KnowledgeBase).where(
+                    KnowledgeBase.status.in_(REMOVING), ~active))).scalars():
+                if await enqueue_removal(session, kb):
+                    queued += 1
+        if queued:
+            LOG.info("kb removal: %d knowledge base(s) queued again", queued)
+        return queued
 
     # -- expiry and refresh ------------------------------------------------------------------------
     async def _expire(self, ctx: TaskContext | None = None) -> dict:
@@ -138,8 +157,10 @@ class FreshnessService:
             purge = sa.select(Knowledge.id).where(Knowledge.deleted_at.is_not(None), Knowledge.deleted_at < cutoff)
             report["purged_items"] = (await session.execute(
                 sa.select(sa.func.count()).select_from(purge.subquery()))).scalar_one()
+            # KBs still being removed are left to their delete task (maint:kb_removal keeps it going)
             dead_kbs = list((await session.execute(sa.select(KnowledgeBase.id).where(
-                KnowledgeBase.deleted_at.is_not(None), KnowledgeBase.deleted_at < cutoff))).scalars())
+                KnowledgeBase.deleted_at.is_not(None), KnowledgeBase.deleted_at < cutoff,
+                KnowledgeBase.status.notin_(REMOVING)))).scalars())
             report["purged_knowledge_bases"] = len(dead_kbs)
             if not dry_run:
                 await session.execute(sa.delete(Embedding).where(Embedding.id.in_(orphan_rows)))

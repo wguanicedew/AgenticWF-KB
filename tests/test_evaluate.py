@@ -62,3 +62,38 @@ def test_eval_harness(database):
     assert summary["quick"]["llm_calls"] == len(evalset.questions)
     print(table(summary))
     assert "multi_doc_f1" in table(summary) and 0 <= summary["search"]["precision"] <= 1
+
+
+def test_answer_grading_summary_and_judge(tmp_path):
+    """Questions with a reference answer and no expected document: judged, and kept out of the
+    retrieval scores. No database."""
+    from agenticwf.kb.api.evaluate import Outcome, openai_judge
+
+    f = tmp_path / "real.yaml"
+    f.write_text("questions:\n  - {q: 'Who signs the logbook?', answer: 'The shift leader, at the end of each shift.'}\n")
+    [q] = EvalSet.load(f).questions
+    assert q["expect"] == [] and q["answer"].startswith("The shift leader")
+
+    rows = [Outcome("a", "deep", [], [], 1.0, correct=1.0, faithful=True),
+            Outcome("b", "deep", [], [], 2.0, correct=0.0, faithful=False),
+            Outcome("c", "deep", ["doc"], ["doc"], 1.0)]
+    s = summarise(rows)["deep"]
+    assert s["questions"] == 3 and s["correct"] == 0.5 and s["faithful"] == 0.5 and s["recall"] == 1.0
+    assert "correct" in table({"deep": s})
+
+    class FakeResponse:
+        def __init__(self, content): self.content = content
+        def raise_for_status(self): pass
+        def json(self): return {"choices": [{"message": {"content": self.content}}]}
+
+    class FakeClient:
+        def __init__(self, content): self.content, self.sent = content, None
+        def post(self, url, **kw):
+            self.sent = (url, kw)
+            return FakeResponse(self.content)
+
+    client = FakeClient('<think>..</think>{"correct": 0.5, "faithful": true, "reason": "misses the time"}')
+    verdict = openai_judge(client, "https://gw.example.org/", "big")("q?", "ref", "ans", ["passage one"])
+    assert verdict == {"correct": 0.5, "faithful": True, "reason": "misses the time"}
+    assert client.sent[0] == "https://gw.example.org/chat/completions" and "passage one" in client.sent[1]["json"]["messages"][0]["content"]
+    assert openai_judge(FakeClient("no json"), "u", "m")("q", "r", "a", [])["correct"] is None

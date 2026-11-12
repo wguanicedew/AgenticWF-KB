@@ -1,0 +1,27 @@
+# Real questions on an existing knowledge base: what users ask, with the answer an expert would
+# accept. Run against the KB as deployed (no --load):
+#
+#   python -m agenticwf.kb.api.evaluate eval/my-questions.yaml --url https://host/app --base-path /kb \
+#       --token-file ~/.agenticwf-kb/token --kb u:alice:shift-docs --modes search,deep \
+#       --judge-url https://aigw.cern.ch --judge-model glm-5.3-flash-int4 --judge-key-env CERN_AIGW_API_KEY \
+#       --json before.json
+#
+# Run it before and after a change (chunking, reranker, question generation, prompts) and compare
+# `correct` and `faithful` (answers) and `recall` (search). 30-50 questions give a usable signal;
+# take them from what people really asked, above all the replies rated badly in the agent (its
+# admin page exports them in this format), and fill in the answer an expert would give.
+#
+# Per question:
+#   q        the question, as a user would ask it
+#   answer   the reference answer, or the facts a correct answer must contain (graded by the judge)
+#   expect   optional: the title(s) of the document(s) that answer it (scored as search recall)
+#   kind     optional: single | multi (needs several documents) | global
+# The two examples below answer from eval/phase2.yaml's documents (try them with --load on that file's corpus).
+questions:
+  - q: "What is the cryostat pressure alarm threshold?"
+    answer: "1.2 bar; when it fires, call the cryo expert (never vent the cryostat yourself)."
+    expect: cryostat
+  - q: "Transfers to a Tier-2 site keep timing out: what do I check and when do I open a ticket?"
+    answer: "Check the FTS channel saturation, then the site's storage status; raise a ticket with the site when more than 10 % of transfers fail in an hour."
+    expect: [network, storage]
+    kind: multi

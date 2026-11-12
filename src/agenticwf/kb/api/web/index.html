@@ -69,6 +69,28 @@ sup.src{color:var(--muted);font-size:10px}
 .ok-check{color:var(--ok)}.bad-check{color:var(--bad)}
 .side-link{display:block;padding:6px 8px;border-radius:6px;cursor:pointer;margin-top:8px}
 .side-link.active{background:var(--bg);outline:1px solid var(--line)}
+.side-link .badge{margin-left:4px}
+aside h3:first-child{margin-top:0}
+aside hr{border:none;border-top:1px solid var(--line);margin:12px 0 4px}
+.kb-table td:first-child{cursor:pointer}
+.kb-table td:first-child b{color:var(--accent)}
+.kb-table .owner{white-space:nowrap}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.new-kb{max-width:480px}
+.kb-list li.removing,.kb-table tr.removing{opacity:.55;cursor:default}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:1px 4px 1px 8px;border:1px solid var(--line);border-radius:12px;font-size:13px;background:var(--bg)}
+.chip button{border:none;background:none;padding:0 4px;color:var(--muted);line-height:1}
+dialog.picker{border:1px solid var(--line);border-radius:10px;padding:0;background:var(--bg);color:var(--fg);width:min(520px,calc(100vw - 32px));max-height:min(640px,calc(100vh - 32px))}
+dialog.picker::backdrop{background:rgba(0,0,0,.35)}
+dialog.picker form{display:flex;flex-direction:column;max-height:inherit}
+dialog.picker .head,dialog.picker .foot{padding:12px 14px}
+dialog.picker .head{border-bottom:1px solid var(--line)}
+dialog.picker .foot{border-top:1px solid var(--line);display:flex;gap:8px;justify-content:flex-end;align-items:center}
+dialog.picker .body{overflow:auto;padding:4px 14px 10px;flex:1}
+dialog.picker label.opt{display:flex;gap:8px;align-items:baseline;padding:4px 2px;border-radius:4px}
+dialog.picker label.opt:hover{background:var(--panel)}
+dialog.picker label.opt.off{opacity:.55}
+dialog.picker .opt small{color:var(--muted)}
 pre.json{white-space:pre-wrap;font:12px ui-monospace,Menlo,monospace;background:var(--panel);padding:8px;border-radius:6px;max-height:320px;overflow:auto}
 </style>
 </head>
@@ -80,17 +102,21 @@ pre.json{white-space:pre-wrap;font:12px ui-monospace,Menlo,monospace;background:
 </header>
 <main>
   <aside>
-    <h2>Knowledge bases</h2>
+    <h3>My knowledge bases</h3>
     <ul class="kb-list" id="kbs"></ul>
+    <a class="side-link" id="browse-link" title="Every knowledge base you can read: yours, your groups', those shared with you, system and remote ones">📚 All knowledge bases <span class="badge" id="browse-count"></span></a>
+    <a class="side-link" id="new-link">➕ New knowledge base</a>
+    <hr>
+    <a class="side-link hidden" id="groups-link" title="The groups and roles from your sign-in: share knowledge bases with them">👥 My groups</a>
     <a class="side-link hidden" id="shares-link">📨 Sharing requests <span class="badge hidden" id="shares-count"></span></a>
     <a class="side-link hidden" id="memory-link">🧠 My memory</a>
     <a class="side-link hidden" id="remotes-link">🔗 Remote knowledge bases</a>
     <a class="side-link hidden" id="web-link">🔎 Web search</a>
     <a class="side-link hidden" id="prompts-link">📝 Prompts</a>
     <a class="side-link hidden" id="tools-link">🧰 Agent tools</a>
-    <p class="muted hidden" id="my-groups" title="From your sign-in: organization (org:), roles (role:), identity-provider groups (idp:). Share with these through 'groups' visibility."></p>
-    <h3>New knowledge base</h3>
-    <form id="new-kb">
+  </aside>
+  <div id="parking" class="hidden">
+    <form id="new-kb" class="new-kb">
       <div class="row"><input name="name" placeholder="Name" required style="flex:1"></div>
       <label class="row muted hidden" id="new-kb-owner-row" title="A group's knowledge base is named g:&lt;group&gt;:&lt;name&gt;; the group's admins manage it, its members read it and add to it">
         owner <select name="owner" id="new-kb-owner"><option value="">me</option></select>
@@ -102,7 +128,7 @@ pre.json{white-space:pre-wrap;font:12px ui-monospace,Menlo,monospace;background:
       <label class="row muted hidden" id="new-kb-wiki"><input type="checkbox" name="wiki"> build an LLM wiki</label>
       <label class="row muted hidden" id="new-kb-memory"><input type="checkbox" name="memory"> feed documents into my memory</label>
     </form>
-  </aside>
+  </div>
   <section>
     <div id="empty" class="muted">Choose a knowledge base.</div>
     <div id="kb-view" class="hidden">
@@ -130,7 +156,8 @@ const AUTH = MODE === "standalone" ? BASE
   : BASE.slice(0, BASE.length - document.querySelector('meta[name="kb-base"]').content.length);
 let state = {kbs: [], kb: null, tab: "documents", me: null, docFilter: {}};
 let FEATURES = {};
-let PRESETS = [];                 // /agentic-search/presets: which exist, which is the default
+let PRESETS = [];
+let CHUNK_STRATEGY = "auto";      // /system/info: how a KB without its own strategy splits documents                 // /agentic-search/presets: which exist, which is the default
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const $ = id => document.getElementById(id);
@@ -149,9 +176,14 @@ function fail(where, e) { where.insertAdjacentHTML("afterbegin", `<p class="erro
 
 // The groups you may share with ('groups' visibility), as /me reports them.
 const myGroups = () => (state.me && state.me.groups) || [];
-// A group as people know it: an organization's name, with the id stored on KBs and items.
-const groupLabel = g => { const n = ((state.me && state.me.group_names) || {})[g]; return n ? `${n} (${g})` : g; };
-const groupsText = gs => gs.map(groupLabel).join(", ");
+// A group as people know it: an organization's name (yours from /me, others' from the KB's
+// group_names), else the id stored on KBs and items (role:…, idp:…, or a shortened org:…).
+const shortId = s => s && s.length > 14 ? s.slice(0, 12) + "…" : s;
+let ALL_GROUPS = null;            // authsvc's groups ({group: "org:<id>", name, member}), once per page
+const groupName = (g, kb) => ((state.me && state.me.group_names) || {})[g] || ((kb && kb.group_names) || {})[g]
+  || (ALL_GROUPS || []).find(x => x.group === g)?.name || (g.startsWith("org:") ? "group " + shortId(g.slice(4)) : g);
+const groupLabel = (g, kb) => groupName(g, kb);
+const groupsText = (gs, kb) => (gs || []).map(g => groupLabel(g, kb)).join(", ");
 const plural = (n, word, many = word + "s") => `${n} ${n === 1 ? word : many}`;
 
 async function loadMe() {
@@ -165,11 +197,7 @@ async function loadMe() {
       `<option value="${esc(g)}">group ${esc(names[g])}</option>`).join("");
     $("new-kb-owner-row").classList.toggle("hidden", !owned.length);
     $("new-kb-owner").onchange = () => $("new-kb-memory").classList.toggle("hidden", !FEATURES.memory || !!$("new-kb-owner").value);
-    if (MODE !== "standalone") {
-      $("my-groups").textContent = myGroups().length ? `Your groups: ${groupsText(myGroups())}` : "You are in no groups yet.";
-      if (MODE === "authsvc") $("my-groups").insertAdjacentHTML("beforeend", ` <a href="${esc(AUTH)}/admin#groups">Groups…</a>`);
-      $("my-groups").classList.remove("hidden");
-    }
+    if (MODE !== "standalone") { $("groups-link").classList.remove("hidden"); $("groups-link").onclick = openGroups; }
   } catch (e) { $("who").textContent = "not signed in"; }
   if (MODE !== "service") {
     // The session knows the signed-in user's name and email; the KB only sees the subject id.
@@ -187,6 +215,7 @@ async function loadMe() {
   try {
     const info = (await api("/system/info")).data;
     FEATURES = info.features || {};
+    CHUNK_STRATEGY = info.chunk_strategy || "auto";
     const d = info.kb_defaults || {};
     for (const [name, on] of [["wiki", d.wiki_enabled], ["memory", d.memory_enabled]])
       $("new-kb").elements[name].defaultChecked = !!on;
@@ -201,6 +230,7 @@ async function loadMe() {
   if (isAdmin()) { $("tools-link").classList.remove("hidden"); $("tools-link").onclick = openTools; }
   if (MODE === "authsvc") { $("shares-link").classList.remove("hidden"); $("shares-link").onclick = openShares; countShares(); }
   try { PRESETS = (await api("/agentic-search/presets")).data; } catch (_) { PRESETS = []; }
+  await allGroups();                // every group's name, for KBs shared with groups you are not in
 }
 
 const isAdmin = () => ((state.me && state.me.scopes) || []).includes("admin");
@@ -212,8 +242,9 @@ const privateNote = kb => kb.visibility === "private" ? `<p class="muted">🔒 $
 
 // Mark the open page in the sidebar: a side link's id, or null (a knowledge base).
 function activate(linkId) {
+  $("parking").append($("new-kb"));   // the new-KB form lives on its own page; keep it when another opens
   document.querySelectorAll(".side-link").forEach(a => a.classList.toggle("active", a.id === linkId));
-  if (linkId) document.querySelectorAll(".kb-list li").forEach(li => li.classList.remove("active"));
+  if (linkId) renderSidebar();          // state.kb is null now: no KB marked, no "Open" entry
 }
 
 // A page of its own (not a knowledge base): title, explanation, no tabs, the URL hash.
@@ -233,42 +264,118 @@ const wikiOn = kb => FEATURES.wiki && kb.indexing_strategy && kb.indexing_strate
 function kbGroup(kb) {
   if (kb.remote) return `From ${kb.remote}`;
   if (state.me && kb.owner_subject === state.me.subject) return "Mine";
+  if (myGroups().includes(kb.owner_subject)) return "My groups'";
   if (kb.owner_subject === "system") return "System";
   return sharedWith(kb) ? "Shared with me" : "Others' (admin view)";   // an admin sees every KB
 }
+const GROUP_ORDER = ["Mine", "My groups'", "Shared with me", "System", "Others' (admin view)"];
+const groupOrder = g => GROUP_ORDER.indexOf(g) + 1 || GROUP_ORDER.length;   // remote ones before the admin view
+const inSidebar = kb => ["Mine", "My groups'"].includes(kbGroup(kb));
 // Why a KB that is not yours is listed: shared with everyone, or with one of your groups (by name);
 // null when only an admin sees it
 function sharedWith(kb) {
   if (kb.visibility === "all") return "everyone";
   const mine = kb.visibility === "groups" ? (kb.groups || []).filter(g => myGroups().includes(g)) : [];
-  return mine.length ? mine.map(groupLabel).join(", ") : null;
+  return mine.length ? mine.map(g => groupLabel(g, kb)).join(", ") : null;
 }
-const shortOwner = s => s && s.length > 14 ? s.slice(0, 12) + "…" : s;
-// The line under a KB that is not yours: whose it is, and with whom it is shared
-function kbSub(kb) {
-  if (kb.remote || kb.owner_subject === "system" || (state.me && kb.owner_subject === state.me.subject)) return "";
-  const via = sharedWith(kb);
-  return `by ${shortOwner(kb.owner_subject)} · ${via ? "shared with " + via : kb.visibility}`;
+const shortOwner = shortId;
+// Whose a KB is, by name: you, a group, a username; the subject only when no name is known
+// (an owner who has not signed in since, or an account of an earlier identity provider)
+function ownerLabel(kb) {
+  if (kb.remote) return kb.remote;
+  if (state.me && kb.owner_subject === state.me.subject) return "you";
+  if (kb.owner_subject === "system") return "system";
+  if (kb.owner_subject.startsWith("org:")) return groupName(kb.owner_subject, kb);
+  return kb.owner_name || shortOwner(kb.owner_subject);
 }
+// With whom a KB is shared, by name
+function accessLabel(kb) {
+  if (kb.visibility === "all") return "everyone";
+  if (kb.visibility === "groups") return (kb.groups || []).length ? groupsText(kb.groups, kb) : "groups (none)";
+  return kb.visibility || "";
+}
+const removing = kb => ["removing", "purging"].includes(kb.status);
+const kbBadges = kb => `${removing(kb) ? ' <span class="badge processing" title="Deleted: its documents, index and files are being removed">removing…</span>' : ""}${kb.type !== "document" ? ` <span class="badge">${esc(kb.type)}</span>` : ""}${wikiOn(kb) ? ' <span class="badge">wiki</span>' : ""}`;
 
 async function loadKbs(select) {
   let kbs = [];
   for (let page = 1; ; page++) {
-    const body = await api(`/knowledge-bases?page_size=100&page=${page}`);
+    const body = await api(`/knowledge-bases?page_size=100&page=${page}&include_removing=true`);
     kbs = kbs.concat(body.data);
     if (!body.data.length || kbs.length >= (body.total ?? 0)) break;
   }
   state.kbs = kbs;
-  const groups = new Map();
-  for (const kb of kbs) { const g = kbGroup(kb); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(kb); }
-  const ul = $("kbs");
-  const order = g => ["Mine", "Shared with me", "System", "Others' (admin view)"].indexOf(g) + 1 || 5;
-  ul.innerHTML = [...groups].sort((a, b) => order(a[0]) - order(b[0])).map(([g, list]) => `<li class="kb-group">${esc(g)}</li>` + list.map(kb =>
-    `<li data-id="${esc(kb.id)}" class="${state.kb && state.kb.id === kb.id ? "active" : ""}" title="${esc(kb.ref)}${kbSub(kb) ? " · owner " + esc(kb.owner_subject) : ""}">
-    <span>${esc(kb.name)}${kb.type !== "document" ? ` <span class="badge">${esc(kb.type)}</span>` : ""}${wikiOn(kb) ? ' <span class="badge">wiki</span>' : ""}${kbSub(kb) ? `<span class="kb-sub">${esc(kbSub(kb))}</span>` : ""}</span>
-    <small>${kb.knowledge_count ?? ""}</small></li>`).join("")).join("");
-  ul.querySelectorAll("li[data-id]").forEach(li => li.onclick = () => openKb(li.dataset.id));
+  renderSidebar();
+  // a KB being removed shows until its delete task is done: look again while there is one
+  clearTimeout(state.removingTimer);
+  if (kbs.some(removing)) state.removingTimer = setTimeout(() => loadKbs().catch(() => {}), 10000);
+  $("browse-count").textContent = String(kbs.length);
   if (select) openKb(select);
+  else if ($("browse-link").classList.contains("active")) openBrowse();   // shown now: show the change
+}
+
+// The sidebar: your KBs and your groups' (one line each), and the KB open now when it is another's
+function renderSidebar() {
+  const open = state.kb && !inSidebar(state.kb) ? [state.kb] : [];
+  const sections = [["Mine", state.kbs.filter(kb => kbGroup(kb) === "Mine")],
+                    ["My groups'", state.kbs.filter(kb => kbGroup(kb) === "My groups'")],
+                    ["Open", open]].filter(([, list]) => list.length);
+  const item = (kb, sub) => `<li data-id="${esc(kb.id)}" class="${state.kb && state.kb.id === kb.id ? "active" : ""}${removing(kb) ? " removing" : ""}" title="${esc(kb.ref)}">
+    <span>${esc(kb.name)}${kbBadges(kb)}${sub ? `<span class="kb-sub">${esc(sub)}</span>` : ""}</span><small>${kb.knowledge_count ?? ""}</small></li>`;
+  const ul = $("kbs");
+  ul.innerHTML = sections.map(([g, list]) => (g === "Mine" && sections.length === 1 ? "" : `<li class="kb-group">${esc(g)}</li>`) +
+    list.map(kb => item(kb, g === "Mine" ? "" : "by " + ownerLabel(kb))).join("")).join("")
+    || '<li class="muted" style="cursor:default">None yet.</li>';
+  ul.querySelectorAll("li[data-id]:not(.removing)").forEach(li => li.onclick = () => openKb(li.dataset.id));
+}
+
+// Every KB you can read, in tables by whose it is
+function openBrowse() {
+  const pane = openPage("browse-link", "All knowledge bases", "Yours, your groups', those shared with you (with everyone, or with a group you are in), the system's and remote ones" + (isAdmin() ? "; as an admin you also see everyone else's." : "."), "browse");
+  pane.innerHTML = `<div class="row"><input id="kb-filter" placeholder="filter: name, owner, group" style="flex:1;max-width:360px">
+    <button class="primary" id="kb-new">➕ New knowledge base</button></div><div id="kb-tables"></div>`;
+  $("kb-new").onclick = openNew;
+  const show = () => {
+    const q = $("kb-filter").value.trim().toLowerCase();
+    const groups = new Map();
+    for (const kb of state.kbs) {
+      if (q && ![kb.name, kb.ref, ownerLabel(kb), accessLabel(kb), kb.owner_subject].some(t => String(t || "").toLowerCase().includes(q))) continue;
+      const g = kbGroup(kb); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(kb);
+    }
+    $("kb-tables").innerHTML = [...groups].sort((a, b) => groupOrder(a[0]) - groupOrder(b[0])).map(([g, list]) =>
+      `<h3>${esc(g)} <span class="muted">(${list.length})</span></h3><table class="kb-table"><thead><tr><th>Name</th><th>Owner</th><th>Shared with</th><th>Items</th></tr></thead><tbody>` +
+      list.map(kb => `<tr data-id="${esc(kb.id)}" class="${removing(kb) ? "removing" : ""}"><td><b>${esc(kb.name)}</b>${kbBadges(kb)}<div class="muted">${esc(kb.ref)}</div></td>
+        <td class="owner" title="${esc(kb.owner_subject)}">${esc(ownerLabel(kb))}</td>
+        <td title="${esc((kb.groups || []).join(", "))}">${esc(accessLabel(kb))}</td><td>${kb.knowledge_count ?? ""}</td></tr>`).join("") +
+      "</tbody></table>").join("") || '<p class="muted">No knowledge base matches.</p>';
+    $("kb-tables").querySelectorAll("tr[data-id]:not(.removing) td:first-child").forEach(td => td.onclick = () => openKb(td.parentNode.dataset.id));
+  };
+  $("kb-filter").oninput = show;
+  show();
+}
+
+// A new knowledge base: the form, on a page of its own
+function openNew() {
+  const pane = openPage("new-link", "New knowledge base", "A knowledge base starts private: share it with your groups, or ask to share it with everyone, in its Settings.", "new");
+  pane.innerHTML = "";
+  pane.append($("new-kb"));
+  $("new-kb").elements.name.focus();
+}
+
+// Your groups and roles from your sign-in: what you share with ('groups' visibility)
+function openGroups() {
+  const pane = openPage("groups-link", "My groups", "From your sign-in. Share a knowledge base with these through its 'groups' visibility; a group's admins can also create knowledge bases the group owns.", "groups");
+  const all = myGroups(), managed = (state.me && state.me.managed_groups) || [];
+  const orgs = all.filter(g => g.startsWith("org:")), roles = all.filter(g => g.startsWith("role:")),
+        idp = all.filter(g => g.startsWith("idp:")), other = all.filter(g => !/^(org|role|idp):/.test(g));
+  const chips = gs => `<div class="chips">${gs.map(g => `<span class="badge" title="share as ${esc(g)}">${esc(g.replace(/^(role|idp):/, ""))}</span>`).join("")}</div>`;
+  pane.innerHTML = `<h3>Groups</h3>` + (orgs.length ? `<table><thead><tr><th>Name</th><th>You are</th><th>Share as</th></tr></thead><tbody>${
+      orgs.map(g => `<tr><td><b>${esc(groupName(g))}</b></td><td>${managed.includes(g) || isAdmin() ? "admin" : "member"}</td><td class="muted"><code>${esc(g)}</code></td></tr>`).join("")}</tbody></table>`
+      : '<p class="muted">You are in no groups yet.</p>') +
+    (MODE === "authsvc" ? `<p><a href="${esc(AUTH)}/admin#groups">Manage groups, ask to join one…</a></p>` : "") +
+    (roles.length ? `<h3>Roles</h3>${chips(roles)}` : "") +
+    (idp.length ? `<h3>Identity-provider groups</h3>${chips(idp)}` : "") +
+    (other.length ? `<h3>Other</h3>${chips(other)}` : "");
 }
 
 function tabsFor(kb) {
@@ -288,10 +395,10 @@ async function openKb(id) {
   if (!tabs.some(([t]) => t === state.tab)) state.tab = tabs[0][0];
   $("empty").classList.add("hidden"); $("kb-view").classList.remove("hidden"); activate(null);
   $("kb-title").textContent = state.kb.name;
-  $("kb-meta").textContent = `${state.kb.ref} · ${state.kb.visibility}${(state.kb.groups || []).length ? " (" + groupsText(state.kb.groups) + ")" : ""} · ${state.kb.type}${state.kb.remote ? ` · read-only, from ${state.kb.remote_url}` : ""}`;
+  $("kb-meta").textContent = `${state.kb.ref} · by ${ownerLabel(state.kb)} · ${state.kb.visibility}${(state.kb.groups || []).length ? " (" + groupsText(state.kb.groups, state.kb) + ")" : ""} · ${state.kb.type}${state.kb.remote ? ` · read-only, from ${state.kb.remote_url}` : ""}`;
   $("tabs").innerHTML = tabs.map(([t, label]) => `<button data-t="${t}" class="${t === state.tab ? "on" : ""}">${label}</button>`).join("");
   $("tabs").querySelectorAll("button").forEach(b => b.onclick = () => { state.tab = b.dataset.t; openKb(id); });
-  document.querySelectorAll(".kb-list li").forEach(li => li.classList.toggle("active", li.dataset.id === id));
+  renderSidebar();
   const pane = $("pane"); pane.innerHTML = "";
   history.replaceState(null, "", `#kb=${encodeURIComponent(id)}&tab=${state.tab}`);
   try { await PANES[state.tab](pane, state.kb, state.page); } catch (e) { fail(pane, e); }
@@ -306,6 +413,9 @@ function openFromHash() {
   if (h.has("prompts") && isAdmin()) return openPrompts();
   if (h.has("tools") && isAdmin()) return openTools();
   if (h.has("shares")) return openShares();
+  if (h.has("browse")) return openBrowse();
+  if (h.has("new")) return openNew();
+  if (h.has("groups") && MODE !== "standalone") return openGroups();
   if (h.get("kb")) { state.tab = h.get("tab") || state.tab; state.page = h.get("page") || undefined; return openKb(h.get("kb")); }
 }
 
@@ -438,8 +548,9 @@ async function listSites(kb) {
     tr.querySelector('[data-act="pages"]').onclick = () => { state.docFilter = {site_id: id}; state.tab = "documents"; openKb(kb.id); };
     tr.querySelector('[data-act="vis"]').onchange = async ev => {
       const visibility = ev.target.value;
-      const groups = visibility === "groups" ? (prompt(`Groups (comma separated). Yours: ${groupsText(myGroups()) || "none"}`, myGroups().join(", ")) || "").split(",").map(s => s.trim()).filter(Boolean) : [];
-      if (!confirm(`Make this site and all its pages '${visibility}'?`)) return listSites(kb);
+      const groups = visibility === "groups" ? await pickGroups([], {title: "Share this site with", others: "no", kb}) : [];
+      if (groups === null || (visibility === "groups" && !groups.length)) return listSites(kb);
+      if (!confirm(`Make this site and all its pages '${visibility}'${groups.length ? " (" + groupsText(groups, kb) + ")" : ""}?`)) return listSites(kb);
       try { await api(`/sites/${id}`, {method: "PUT", json: {visibility, groups}}); } catch (e) { alert(e.message); }
       listSites(kb);
     };
@@ -507,7 +618,8 @@ async function listDocs(kb) {
     };
     tr.querySelector('[data-act="vis"]').onchange = async ev => {
       const visibility = ev.target.value;
-      const groups = visibility === "groups" ? (prompt(`Groups (comma separated). Yours: ${groupsText(myGroups()) || "none"}`, myGroups().join(", ")) || "").split(",").map(s => s.trim()).filter(Boolean) : [];
+      const groups = visibility === "groups" ? await pickGroups([], {title: "Share this document with", others: "no", kb}) : [];
+      if (groups === null || (visibility === "groups" && !groups.length)) return listDocs(kb);
       try { await api(`/knowledge/${id}`, {method: "PUT", json: {visibility, groups}}); } catch (e) { alert(e.message); }
       listDocs(kb);
     };
@@ -738,14 +850,56 @@ async function freshnessPane(pane, kb) {
 }
 
 // --- settings ----------------------------------------------------------------------------------------------
+// How documents are split and enriched for search (docs/ingestion.md): applies to documents added
+// from now on, and to the others once re-processed (POST /reindex).
+const STRATEGY_LABEL = {semantic: "by meaning (semantic)", auto: "by structure (auto)"};
+function retrievalSettings(kb) {
+  const c = kb.chunking_config || {}, q = kb.question_generation_config || {};
+  const mode = c.enable_parent_child ? "parent" : "flat";
+  return `<h3>Retrieval</h3>
+    <div class="row"><label title="Parent-child: small passages are searched, and a hit brings its larger parent (the whole table or procedure) to the answer">Chunking
+      <select name="chunk_mode"><option value="parent" ${mode === "parent" ? "selected" : ""}>parent-child</option><option value="flat" ${mode === "flat" ? "selected" : ""}>fixed size</option></select></label>
+      <label data-mode="flat">size <input name="chunk_size" type="number" min="200" max="8000" step="100" value="${esc(c.chunk_size ?? 1200)}" style="width:7em"></label>
+      <label data-mode="flat">overlap <input name="chunk_overlap" type="number" min="0" max="2000" step="50" value="${esc(c.chunk_overlap ?? 200)}" style="width:6em"></label>
+      <label data-mode="parent">parent <input name="parent_chunk_size" type="number" min="500" max="8000" step="100" value="${esc(c.parent_chunk_size ?? 2400)}" style="width:7em"></label>
+      <label data-mode="parent">child <input name="child_chunk_size" type="number" min="100" max="2000" step="50" value="${esc(c.child_chunk_size ?? 600)}" style="width:6em"></label>
+      <span class="muted">characters</span></div>
+    <div class="row"><label title="Where chunks end: by the document's structure (headings, numbered titles), or also where the meaning changes (embeds every sentence or two at ingestion)">Split
+      <select name="chunk_strategy">${[["", `default (${STRATEGY_LABEL[CHUNK_STRATEGY] || CHUNK_STRATEGY})`], ["semantic", STRATEGY_LABEL.semantic], ["auto", STRATEGY_LABEL.auto], ["heading", "headings only"], ["legacy", "by size only"]].map(([v, l]) => `<option value="${v}" ${(c.strategy || "") === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      <label title="One or two sentences per chunk, written by a model, that place it in its document (which system, section, version, what 'it' refers to); searched with the chunk, not shown"><input type="checkbox" name="contextual" ${(kb.indexing_strategy || {}).contextual_enabled ? "checked" : ""}> contextual chunks</label></div>
+    <div class="row"><label title="A summary of each document, indexed and shown with it"><input type="checkbox" name="summaries" ${kb.summary_model_id ? "checked" : ""}> summarize documents</label>
+      <label title="Questions each passage answers, indexed with it: they match how people ask rather than how the document is written"><input type="checkbox" name="questions" ${q.enabled ? "checked" : ""}> generate questions per passage</label>
+      <label>how many <input name="question_count" type="number" min="1" max="10" value="${esc(q.question_count ?? 3)}" style="width:4em"></label></div>
+    <p class="muted">Search results are re-ranked by how well each passage answers the question${kb.rerank_model_id ? "" : " (the deployment's reranker)"}.</p>`;
+}
+
+// Puts the Retrieval section into the update body; true when documents need re-processing for it.
+function readRetrievalSettings(f, kb, body) {
+  const old = kb.chunking_config || {}, oldQ = kb.question_generation_config || {};
+  const chunking = {enable_parent_child: f.chunk_mode.value === "parent", strategy: f.chunk_strategy.value,
+    chunk_size: +f.chunk_size.value, chunk_overlap: +f.chunk_overlap.value,
+    parent_chunk_size: +f.parent_chunk_size.value, child_chunk_size: +f.child_chunk_size.value};
+  const changed = Object.entries(chunking).some(([k, v]) => (k === "strategy" ? (old[k] || "") : old[k]) !== v);
+  const wasContextual = !!(kb.indexing_strategy || {}).contextual_enabled;
+  body.indexing_strategy = {...(body.indexing_strategy || {}), contextual_enabled: f.contextual.checked};
+  if (changed) body.chunking_config = chunking;
+  body.question_generation_config = {...oldQ, enabled: f.questions.checked, question_count: +f.question_count.value || 3};
+  // "default": the deployment's chat model summarizes; "": no summaries
+  if (f.summaries.checked !== !!kb.summary_model_id) body.summary_model_id = f.summaries.checked ? "default" : "";
+  const enriched = (f.questions.checked && !oldQ.enabled) || (f.summaries.checked && !kb.summary_model_id)
+    || f.contextual.checked !== wasContextual;
+  return changed || enriched;
+}
+
 async function settingsPane(pane, kb) {
   pane.innerHTML = `<form id="kb-settings">
     <div class="row"><label>Name <input name="name" value="${esc(kb.name)}"></label></div>
     <div class="row"><label style="flex:1">Description <textarea name="description">${esc(kb.description)}</textarea></label></div>
     <div class="row"><label>Visibility <select name="visibility">${["private", "groups", "all"].map(v => `<option value="${v}" ${v === kb.visibility ? "selected" : ""} ${v === "all" && !isAdmin() ? 'title="Only an admin shares with everyone: saving sends a request to the admins"' : ""}>${v}${v === "all" && !isAdmin() ? " (needs approval)" : ""}</option>`).join("")}</select></label>
-      <label title="Yours: ${esc(groupsText(myGroups()) || "none")}">Groups <input name="groups" value="${esc(kb.groups.join(", "))}" placeholder="${esc(myGroups().join(", ") || "org:eic, role:shifter")}"></label></div>
+      <span class="row" id="kb-groups-row" style="margin:0">Groups <span class="chips" id="kb-groups"></span> <button type="button" id="kb-groups-pick">Choose…</button></span></div>
     ${FEATURES.wiki && kb.type === "document" ? `<h3>LLM wiki</h3><div class="row"><label><input type="checkbox" name="wiki" ${wikiOn(kb) ? "checked" : ""}> build a wiki from this knowledge base's documents</label>
       <label>Granularity <select name="granularity">${["focused", "standard", "exhaustive"].map(g => `<option ${(kb.wiki_config || {}).extraction_granularity === g ? "selected" : ""}>${g}</option>`).join("")}</select></label></div>` : ""}
+    ${kb.type === "document" ? retrievalSettings(kb) : ""}
     ${FEATURES.memory && kb.type === "document" ? `<h3>Memory</h3><div class="row"><label><input type="checkbox" name="memory" ${(kb.memory_config || {}).enabled ? "checked" : ""}> feed processed documents into my memory</label>
       <label>Group <input name="memory_group" value="${esc((kb.memory_config || {}).group_id || "default")}"></label></div>` : ""}
     ${kb.type === "records" ? `<h3>Records</h3><div class="row"><label>Default type <input name="default_type" value="${esc((kb.records_config || {}).default_type || "")}" placeholder="experiment_run"></label>
@@ -755,17 +909,36 @@ async function settingsPane(pane, kb) {
     <div id="kb-share-status"></div>
     <div class="row"><button class="primary">Save</button> <button type="button" id="del-kb">Delete knowledge base</button><span id="kb-save-msg"></span></div></form>`;
   if (MODE === "authsvc") showKbShareStatus(kb);
+  // The groups, as chips: × removes one, Choose… opens the picker
+  let groups = [...(kb.groups || [])];
+  const showGroups = () => {
+    const on = $("kb-settings").visibility.value === "groups";
+    $("kb-groups-row").classList.toggle("hidden", !on);
+    $("kb-groups").innerHTML = groups.map(g => `<span class="chip" title="${esc(g)}">${esc(groupName(g, kb))}${myGroups().includes(g) || isAdmin() ? "" : " ⏳"}<button type="button" data-g="${esc(g)}" title="Remove">×</button></span>`).join("")
+      || '<span class="muted">none yet</span>';
+    $("kb-groups").querySelectorAll("button[data-g]").forEach(b => b.onclick = () => { groups = groups.filter(g => g !== b.dataset.g); showGroups(); });
+  };
+  $("kb-groups-pick").onclick = async () => { const picked = await pickGroups(groups, {kb}); if (picked) { groups = picked; showGroups(); } };
+  $("kb-settings").visibility.onchange = async () => {
+    showGroups();
+    if ($("kb-settings").visibility.value === "groups" && !groups.length) $("kb-groups-pick").click();
+  };
+  showGroups();
+  const modeSel = $("kb-settings").chunk_mode;   // show the sizes of the chosen chunking only
+  if (modeSel) { const sizes = () => $("kb-settings").querySelectorAll("[data-mode]").forEach(l => l.classList.toggle("hidden", l.dataset.mode !== modeSel.value)); modeSel.onchange = sizes; sizes(); }
+  allGroups().then(() => { if ($("kb-groups")) showGroups(); });   // names of groups you are not in
   $("kb-settings").onsubmit = async ev => {
     ev.preventDefault();
     const f = ev.target;
     try {
       const body = {name: f.name.value, description: f.description.value, visibility: f.visibility.value,
-        groups: f.groups.value.split(",").map(s => s.trim()).filter(Boolean)};
+        groups: f.visibility.value === "groups" ? groups : []};
       if (f.wiki) { body.indexing_strategy = {wiki_enabled: f.wiki.checked}; body.wiki_config = {...(kb.wiki_config || {}), extraction_granularity: f.granularity.value}; }
       if (f.memory) body.memory_config = {enabled: f.memory.checked, group_id: f.memory_group.value || "default"};
+      const rechunk = f.chunk_mode ? readRetrievalSettings(f, kb, body) : false;
       if (f.default_type) body.records_config = {...(kb.records_config || {}), default_type: f.default_type.value || null,
         strict: f.strict.checked, keep_versions: f.keep_versions.checked};
-      const reshare = (body.visibility !== kb.visibility || body.groups.join() !== (kb.groups || []).join());
+      const reshare = (body.visibility !== kb.visibility || [...body.groups].sort().join() !== [...(kb.groups || [])].sort().join());
       // wider than the owner may share: a request instead, and the rest of the settings saved as they are
       const needsRequest = reshare && !isAdmin() && (body.visibility === "all" ||
         (body.visibility === "groups" && body.groups.some(g => !myGroups().includes(g))));
@@ -786,6 +959,10 @@ async function settingsPane(pane, kb) {
       if (saved.applied_to_items) alert(`Shared: ${saved.applied_to_items.documents} documents and ${saved.applied_to_items.sites} sites are now '${saved.applied_to_items.visibility}'.`);
       if (f.wiki && f.wiki.checked && !wikiOn(kb) && confirm("Build the wiki from the existing documents now?"))
         await api(`/knowledgebase/${kb.id}/wiki/rebuild`, {method: "POST"});
+      if (rechunk && kb.knowledge_count && confirm(`Re-process the ${plural(kb.knowledge_count, "document")} now, so the new chunking and enrichment apply to them? (Documents stay searchable meanwhile; enrichment costs LLM calls.)`)) {
+        const r = (await api(`/knowledge-bases/${kb.id}/reindex`, {method: "POST", json: {}})).data;
+        alert(`${plural(r.queued, "document")} queued for re-processing.`);
+      }
       state.kb = null; await loadKbs(kb.id);
     } catch (e) {
       const msg = $("kb-save-msg");   // next to Save, where it is seen
@@ -1268,6 +1445,80 @@ function presetOptions(kb) {
     .filter(([, , on]) => on).map(([v, label]) => `<option value="${v}"${v === def ? " selected" : ""}>${label}</option>`).join("");
 }
 
+// --- group picker: whom to share with ('groups' visibility) -------------------------------------
+// The roles every account has: sharing with them is sharing with everyone, so they are not offered
+const NOISE_ROLE = g => /^role:(default-roles-.*|offline_access|uma_authorization)$/.test(g);
+async function allGroups() {
+  if (ALL_GROUPS || MODE !== "authsvc") return ALL_GROUPS || [];
+  try {
+    const r = await fetch(AUTH + "/auth/groups", {credentials: "same-origin"});
+    ALL_GROUPS = r.ok ? (await r.json()).groups || [] : [];
+  } catch (_) { ALL_GROUPS = []; }
+  return ALL_GROUPS;
+}
+
+// Choose groups in a dialog: your groups and roles, the other groups (others = "request": offered,
+// marked as needing approval; "no": shown disabled, as an item cannot be shared with them), and any
+// group by id. Resolves to the chosen list, or null when cancelled.
+async function pickGroups(selected, {title = "Share with groups", others = "request", kb = null} = {}) {
+  const chosen = new Set(selected || []);
+  const mine = myGroups();
+  await allGroups();
+  const label = g => groupName(g, kb);
+  const orgs = mine.filter(g => g.startsWith("org:"));
+  const roles = mine.filter(g => !g.startsWith("org:") && !NOISE_ROLE(g));
+  const foreign = (ALL_GROUPS || []).map(g => g.group).filter(g => !mine.includes(g));
+  const extra = [...chosen].filter(g => !mine.includes(g) && !foreign.includes(g));   // stored ids we know nothing about
+  const canForeign = isAdmin() || others === "request";
+  const dlg = document.createElement("dialog");
+  dlg.className = "picker";
+  const opt = (g, note, off) => `<label class="opt ${off ? "off" : ""}" data-text="${esc((label(g) + " " + g).toLowerCase())}">
+    <input type="checkbox" value="${esc(g)}" ${chosen.has(g) ? "checked" : ""} ${off ? "disabled" : ""}>
+    <span><b>${esc(label(g).replace(/^(role|idp):/, ""))}</b> <small>${esc(g)}${note ? " · " + esc(note) : ""}</small></span></label>`;
+  const section = (h, list) => list.length ? `<h3>${esc(h)}</h3>` + list.join("") : "";
+  dlg.innerHTML = `<form method="dialog"><div class="head"><h2>${esc(title)}</h2>
+      <input name="q" placeholder="find a group" style="width:100%" autocomplete="off"></div>
+    <div class="body">
+      ${section("Your groups", orgs.map(g => opt(g, (state.me.managed_groups || []).includes(g) ? "admin" : "")))}
+      ${section("Your roles", roles.map(g => opt(g)))}
+      ${section("Other groups", foreign.map(g => opt(g, isAdmin() ? "" : canForeign ? "needs its admins' approval" : "you are not in it", !canForeign)))}
+      ${section("Also shared with", extra.map(g => opt(g)))}
+      ${orgs.length + roles.length + foreign.length + extra.length ? "" : '<p class="muted">You are in no groups yet.</p>'}
+      <p class="muted none hidden">No group matches.</p>
+      <details style="margin-top:10px"><summary class="muted">Add a group by id</summary>
+        <div class="row"><input name="extra" placeholder="org:&lt;id&gt;, role:&lt;name&gt;, idp:&lt;group&gt;" style="flex:1"></div></details>
+    </div>
+    <div class="foot"><span class="muted" id="pick-n" style="flex:1"></span><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Done</button></div></form>`;
+  document.body.append(dlg);
+  const f = dlg.querySelector("form"), boxes = [...dlg.querySelectorAll("input[type=checkbox]")];
+  // Enter in a text box would submit with the first button (Cancel): it does nothing in the search, Done in "by id"
+  f.onkeydown = ev => { if (ev.key === "Enter" && ev.target.matches("input[type=text], input:not([type])")) { ev.preventDefault(); if (ev.target.name === "extra") dlg.close("ok"); } };
+  const count = () => { dlg.querySelector("#pick-n").textContent = `${boxes.filter(b => b.checked).length} selected`; };
+  boxes.forEach(b => b.onchange = count); count();
+  f.q.oninput = () => {
+    const q = f.q.value.trim().toLowerCase();
+    let shown = 0;
+    dlg.querySelectorAll("label.opt").forEach(l => { const on = !q || l.dataset.text.includes(q); l.classList.toggle("hidden", !on); shown += on; });
+    dlg.querySelectorAll(".body h3").forEach(h => {      // hide a section heading with nothing left under it
+      let n = h.nextElementSibling, any = false;
+      while (n && n.matches("label.opt")) { any ||= !n.classList.contains("hidden"); n = n.nextElementSibling; }
+      h.classList.toggle("hidden", !any);
+    });
+    dlg.querySelector(".none").classList.toggle("hidden", !!shown || !boxes.length);
+  };
+  return new Promise(resolve => {
+    dlg.onclose = () => {
+      const ok = dlg.returnValue === "ok";
+      const typed = ok ? f.extra.value.split(",").map(x => x.trim()).filter(Boolean) : [];
+      const out = [...new Set([...boxes.filter(b => b.checked).map(b => b.value), ...typed])];
+      dlg.remove();
+      resolve(ok ? out : null);
+    };
+    dlg.showModal();
+    f.q.focus();
+  });
+}
+
 // --- sharing requests: wider sharing than an owner may do (docs/data-model.md, Sharing requests) ---
 const shareTarget = r => r.visibility === "all" ? "everyone" : groupsText(r.groups);
 const shareWhen = t => t ? new Date(t).toLocaleString() : "";
@@ -1517,6 +1768,9 @@ const PANES = {documents: documentsPane, sites: sitesPane, search: searchPane, a
                freshness: freshnessPane, settings: settingsPane, records: recordsPane, query: queryPane,
                types: typesPane, wiki: wikiPane};
 
+$("browse-link").onclick = openBrowse;
+$("new-link").onclick = openNew;
+
 $("new-kb").onsubmit = async ev => {
   ev.preventDefault();
   const f = ev.target, body = {name: f.name.value, type: f.type.value};
@@ -1526,7 +1780,7 @@ $("new-kb").onsubmit = async ev => {
     if (FEATURES.memory && !body.group) body.memory_config = {enabled: f.memory.checked};
   }
   try { const kb = (await api("/knowledge-bases", {method: "POST", json: body})).data; f.reset(); await loadKbs(kb.id); }
-  catch (e) { fail($("kbs"), e); }
+  catch (e) { fail(f, e); }
 };
 
 // status changes arrive on the event stream; refresh the document or site list when one is shown

@@ -57,6 +57,9 @@ class SystemService:
             "version": kb_version(),
             "features": self.features(),
             "kb_defaults": {name: features.kb_default(name) for name in features.KB_DEFAULTS},
+            # how a KB that sets no chunking strategy of its own splits documents ([ingestion] strategy)
+            "chunk_strategy": (config_get("ingestion", "strategy") if config_has_option("ingestion", "strategy")
+                               else "") or "auto",
             "bm25_tokenizer": self.bm25_tokenizer(),
             "extensions": await self.extensions(),
         }

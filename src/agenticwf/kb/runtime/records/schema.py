@@ -75,6 +75,7 @@ class FieldInfo:
     format: str = ""
     log: bool = False
     scope: str = "record"         # record | items
+    alternatives: tuple = ()      # every scalar type of a union (["string", "number", ...]), else ()
 
     @property
     def numeric(self) -> bool:
@@ -92,6 +93,15 @@ def _type_of(node: dict) -> str:
     return t or ("object" if "properties" in node else "string")
 
 
+def _alternatives_of(node: dict) -> tuple:
+    """The scalar types of a union type with more than one (null aside), else ()."""
+    t = node.get("type")
+    if not isinstance(t, list):
+        return ()
+    scalars = tuple(x for x in t if x in SCALARS)
+    return scalars if len(scalars) > 1 else ()
+
+
 def fields_of(schema: dict, items_path: str | None = None) -> dict[tuple[str, str], FieldInfo]:
     """{(scope, path): FieldInfo} for every declared property, nested objects included. The
     items array's object properties are listed with scope `items`, relative to the item."""
@@ -103,7 +113,8 @@ def fields_of(schema: dict, items_path: str | None = None) -> dict[tuple[str, st
                 continue
             path = f"{prefix}{name}"
             kind = _type_of(child)
-            out[(scope, path)] = FieldInfo(path, kind, child.get("format", ""), bool(child.get("x-log")), scope)
+            out[(scope, path)] = FieldInfo(path, kind, child.get("format", ""), bool(child.get("x-log")), scope,
+                                           _alternatives_of(child))
             if kind == "object":
                 walk(child, path + ".", scope)
             elif kind == "array" and scope == "record" and path == items_path:
@@ -124,7 +135,7 @@ def dynamic_of(schema: dict, items_path: str | None = None) -> dict[tuple[str, s
         extra = node.get("additionalProperties")
         if prefix and isinstance(extra, dict) and _type_of(extra) in SCALARS:
             out[(scope, prefix[:-1])] = FieldInfo("", _type_of(extra), extra.get("format", ""),
-                                                  bool(extra.get("x-log")), scope)
+                                                  bool(extra.get("x-log")), scope, _alternatives_of(extra))
         for name, child in (node.get("properties") or {}).items():
             if not isinstance(child, dict):
                 continue
@@ -224,7 +235,8 @@ class TypeDef:
             parent, _, key = path.rpartition(".")
             template = self.dynamic.get((scope, parent))
             if template is not None and _KEY.match(key):
-                info = FieldInfo(path, template.type, template.format, template.log, scope)
+                info = FieldInfo(path, template.type, template.format, template.log, scope,
+                                 template.alternatives)
         if info is None:
             where = "item " if scope == "items" else ""
             raise Invalid(f"unknown {where}field {path!r} for record type {self.name}")

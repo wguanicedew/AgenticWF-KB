@@ -1,6 +1,6 @@
 """
 Wiki read tools (docs/agentic-search.md, Wiki read tools; docs/llm-wiki.md): wiki_search,
-wiki_read_page, wiki_global_search. Read-only; offered with the `wiki` preset, and in `deep` when
+wiki_read_page, wiki_related (the knowledge graph: relations around pages), wiki_global_search. Read-only; offered with the `wiki` preset, and in `deep` when
 a wiki-enabled KB is in scope. Pages come back as `pN`, their source chunks as `cN` (with `dN`).
 """
 
@@ -11,7 +11,7 @@ import re
 import sqlalchemy as sa
 
 from agenticwf.kb.core.orm.base.session import async_session_scope
-from agenticwf.kb.core.orm.models.ext import WikiPage
+from agenticwf.kb.core.orm.models.ext import WikiPage, WikiRelation
 from agenticwf.kb.core.orm.models.kb import Chunk, Knowledge
 from agenticwf.kb.runtime import access
 from agenticwf.kb.runtime.agentic.tools import Tool, ToolContext, ToolError, attr, int_arg, list_arg
@@ -19,6 +19,8 @@ from agenticwf.kb.runtime.errors import Invalid, NotFound
 
 SOURCES = 30
 SOURCE_CHARS = 200
+RELATIONS = 40             # edges wiki_related returns at most (heaviest first)
+EDGE_SOURCES = 2           # cited passages per edge
 
 
 def page_payload(page, score=None) -> dict:
@@ -104,6 +106,103 @@ async def wiki_read_page(tc: ToolContext, args: dict) -> str:
     return tc.clip("\n".join(out))
 
 
+def _page_refs(tc: ToolContext, refs: list[str], kb_ids: list[str]) -> list[tuple[list[str], str]]:
+    """(candidate KB ids, slug) for slugs or pN handles."""
+    out = []
+    for ref in refs:
+        handle = tc.handles.lookup(ref)
+        if handle is not None:
+            if handle.prefix != "p":
+                raise ToolError(f"{ref} is not a wiki page")
+            kb_id, _, slug = handle.key.partition(":")
+            out.append(([kb_id], slug))
+        else:
+            out.append((kb_ids, ref.strip()))
+    return out
+
+
+async def wiki_related(tc: ToolContext, args: dict) -> str:
+    """The knowledge graph around pages: their relations (source -relation-> target, with a
+    description and the passages that state it), `hops` steps out, and the pages reached."""
+    refs = list_arg(args, "slugs")[:5]
+    if not refs:
+        raise ToolError("give 1 to 5 slugs or pN handles")
+    hops = int_arg(args, "hops", 1, 1, 2)
+    wanted = str(args.get("relation") or "").strip().lower()
+    kb_ids = wiki_kb_ids(tc)
+    starts = _page_refs(tc, refs, kb_ids)
+    edges: dict[str, WikiRelation] = {}
+    async with async_session_scope(commit=False) as session:
+        frontier = {(kb, slug) for candidates, slug in starts for kb in candidates}
+        seen = set(frontier)
+        for _ in range(hops):
+            if not frontier:
+                break
+            conditions = [sa.and_(WikiRelation.knowledge_base_id == kb,
+                                  sa.or_(WikiRelation.source_slug == slug, WikiRelation.target_slug == slug))
+                          for kb, slug in frontier]
+            query = sa.select(WikiRelation).where(sa.or_(*conditions))
+            if wanted:
+                query = query.where(sa.func.lower(WikiRelation.relation).contains(wanted))
+            rows = (await session.execute(query.order_by(WikiRelation.weight.desc()).limit(RELATIONS * 3))).scalars().all()
+            frontier = set()
+            for row in rows:
+                edges.setdefault(row.id, row)
+                for slug in (row.source_slug, row.target_slug):
+                    if (row.knowledge_base_id, slug) not in seen:
+                        seen.add((row.knowledge_base_id, slug))
+                        frontier.add((row.knowledge_base_id, slug))
+        chosen = sorted(edges.values(), key=lambda r: -r.weight)[:RELATIONS]
+        slugs_by_kb: dict[str, set[str]] = {}
+        for row in chosen:
+            slugs_by_kb.setdefault(row.knowledge_base_id, set()).update((row.source_slug, row.target_slug))
+        for candidates, slug in starts:
+            for kb in candidates:
+                slugs_by_kb.setdefault(kb, set()).add(slug)
+        pages = {}
+        for kb, slugs in slugs_by_kb.items():
+            for page in (await session.execute(sa.select(WikiPage).where(
+                    WikiPage.knowledge_base_id == kb, WikiPage.slug.in_(slugs), WikiPage.deleted_at.is_(None),
+                    WikiPage.status == "published"))).scalars():
+                pages[(kb, page.slug)] = page
+        chunk_ids = list(dict.fromkeys(r.split("|")[1] for row in chosen for r in (row.chunk_refs or [])[:EDGE_SOURCES]
+                                       if r.count("|") >= 2))[:SOURCES]
+        rows = (await session.execute(sa.select(Chunk, Knowledge).join(Knowledge, Knowledge.id == Chunk.knowledge_id)
+                                      .where(Chunk.id.in_(chunk_ids or ["-"]), Knowledge.deleted_at.is_(None)))).all()
+        for page in pages.values():
+            session.expunge(page)
+    from agenticwf.kb.runtime.agentic.tools.knowledge import chunk_handle
+
+    cited = {}
+    for chunk, item in rows:
+        if access.can_read_item(tc.auth, item):
+            cited[chunk.id] = (chunk_handle(tc, {"id": chunk.id, "knowledge_id": item.id, "knowledge_title": item.title,
+                                                 "knowledge_base_id": item.knowledge_base_id, "content": chunk.content,
+                                                 "score": None, "chunk_index": chunk.chunk_index,
+                                                 "chunk_type": chunk.chunk_type}), chunk.content)
+    if not chosen:
+        found = [s for (_, s) in pages]
+        return (f"No relations recorded around {', '.join(found) or ', '.join(refs)}. Read the pages "
+                "(wiki_read_page) or search the documents (search_knowledge).")
+
+    def end(kb: str, slug: str, side: str) -> str:   # source="slug" source_page="pN"
+        page = pages.get((kb, slug))
+        return f'{side}="{attr(slug)}"' + (f' {side}_page="{page_handle(tc, page)}"' if page else "")
+
+    out = []
+    for row in chosen:
+        sources = [cited[r.split("|")[1]] for r in (row.chunk_refs or [])[:EDGE_SOURCES]
+                   if r.count("|") >= 2 and r.split("|")[1] in cited]
+        body = attr(row.description) + "".join(f'\n  <source id="{h}">{attr(text[:SOURCE_CHARS])}</source>'
+                                               for h, text in sources)
+        out.append(f'<relation {end(row.knowledge_base_id, row.source_slug, "source")} relation="{attr(row.relation)}" '
+                   f'{end(row.knowledge_base_id, row.target_slug, "target")} weight="{row.weight:g}">{body}</relation>')
+    reached = [p for (kb, slug), p in pages.items()]
+    out.append("<pages>\n" + "\n".join(f'<page id="{page_handle(tc, p)}" slug="{attr(p.slug)}" type="{p.page_type}" '
+                                        f'title="{attr(p.title)}">{attr(p.summary)}</page>' for p in reached) + "\n</pages>")
+    return tc.clip("\n".join(out))
+
+
 async def wiki_global_search(tc: ToolContext, args: dict) -> str:
     query = str(args.get("query") or "")
     kb_ids = wiki_kb_ids(tc, list_arg(args, "knowledge_base_ids"))
@@ -148,6 +247,14 @@ TOOLS = [
          "passages as citable cN (verify exact claims with read_document).",
          {"type": "object", "properties": {"slugs": {"type": "array", "items": {"type": "string"}, "maxItems": 5}},
           "required": ["slugs"]}, wiki_read_page, group="wiki"),
+    Tool("wiki_related", "Follow the knowledge graph from up to 5 wiki pages (slugs or pN): the relations around "
+         "them (source -relation-> target, with a description and cited passages cN), 1 or 2 hops out, and the pages "
+         "reached (pN). Use it for questions that connect things: what depends on, caused, uses or replaced what.",
+         {"type": "object", "properties": {"slugs": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+                                           "hops": {"type": "integer", "minimum": 1, "maximum": 2},
+                                           "relation": {"type": "string",
+                                                        "description": "only relations whose name contains this"}},
+          "required": ["slugs"]}, wiki_related, group="wiki"),
     Tool("wiki_global_search", "Answer a question about the whole corpus (themes, overall risks) from the wiki's "
          "community pages: map over communities, reduce to one answer with pN sources.",
          {"type": "object", "properties": {"query": {"type": "string"}, "level": {"type": "integer", "minimum": 0,

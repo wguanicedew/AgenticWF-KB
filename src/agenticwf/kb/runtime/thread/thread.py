@@ -104,9 +104,11 @@ class KBThread:
         return await self.services.models.debug(self.auth, ref)
 
     # -- knowledge bases ---------------------------------------------------------------------------
-    async def list_kbs(self, page=1, page_size=20, shared_only=False, kb_type=None):
+    async def list_kbs(self, page=1, page_size=20, shared_only=False, kb_type=None, include_removing=False):
         await self.services.knowledge_bases.ensure_personal(self.auth)
-        rows, total = await self.services.knowledge_bases.list(self.auth, page, page_size, shared_only, kb_type)
+        extra_args = {"include_removing": True} if include_removing else {}
+        rows, total = await self.services.knowledge_bases.list(self.auth, page, page_size, shared_only, kb_type,
+                                                               **extra_args)
         remote = getattr(self.services, "remote", None)
         extra = await remote.list_kbs(self.auth, kb_type) if remote is not None and not shared_only else []
         if not extra:
