@@ -1,0 +1,196 @@
+# AgenticWF knowledge service configuration (ConfigParser INI), installed as /etc/agenticwf/kb.cfg.
+# Every section and key, with defaults: docs/configuration.md. Mount your own over this file
+# (-v /etc/agenticwf/kb.cfg:/etc/agenticwf/kb.cfg:ro) to change it.
+
+[database]
+# The container's PostgreSQL over its Unix socket, peer authentication (OS user kb = role kb).
+# An external server: postgresql+psycopg://kb:<password>@host:5432/kb (write % as %%).
+default = postgresql+psycopg://kb@/kb?host=/run/postgresql
+pool_size = 10
+max_overflow = 10
+pool_recycle = 3600
+# required_extensions = vector pg_trgm pg_search
+
+[logging]
+level = INFO
+# file = /var/lib/agenticwf-kb/logs/kb.log
+
+[storage]
+backend = local
+root = /var/lib/agenticwf-kb/files
+max_file_mb = 50
+
+[retrieval]
+# One BM25 index for the deployment (ParadeDB pg_search); changing it means reindexing.
+bm25_tokenizer = icu
+
+[ingestion]
+# A new KB's chunking (existing KBs keep theirs: change it in the KB's Settings, then re-process).
+# Parent-child: small children are searched (precise matches), and a hit returns its parent, so
+# the answer sees the whole table or procedure around it. chunk_size / chunk_overlap apply with
+# enable_parent_child = false.
+chunk_size = 1200
+chunk_overlap = 200
+enable_parent_child = true
+parent_chunk_size = 2400
+child_chunk_size = 600
+# semantic: by structure (headings, numbered titles), and within a section where the meaning
+# changes (embeds every sentence or two at ingestion; by structure when embedding fails).
+# auto: by structure only. A KB may choose otherwise in its Settings.
+strategy = semantic
+
+[workers]
+queues = default postprocess wiki
+concurrency = 3
+poll_seconds = 1
+
+# Models: one section per model (docs/configuration.md, System models). A chat model that
+# agentic search uses needs supports_tools = true.
+# BNL BRAIN (LiteLLM at inference0-api.sdcc.bnl.gov), OpenAI-compatible: posts to
+# <base_url>/embeddings and <base_url>/chat/completions. BNL network or VPN only; keys at
+# https://inference0-api.sdcc.bnl.gov/km (BNL_BRAIN_API_KEY in agenticwf.env).
+[models]
+default_embedding = bnl-nomic
+default_chat = bnl-nemotron-super
+# Results are re-ordered by how well each passage answers the query (docs/retrieval.md, Rerank).
+default_rerank = bnl-llm-rerank
+embedding_timeout = 180
+
+[models.embedding.bnl-nomic]
+provider = openai_compat
+base_url = https://inference0-api.sdcc.bnl.gov
+model = nomic-embed-text
+dimension = 768
+api_key_env = BNL_BRAIN_API_KEY
+max_concurrency = 2
+
+# BRAIN lists no rerank model: a chat model grades the candidates (provider = llm, one call per
+# search). A cross-encoder is faster and usually better: run text-embeddings-inference with
+# BAAI/bge-reranker-v2-m3 (AgenticWF's compose.yaml, profile reranker, listens on 127.0.0.1:8081),
+# uncomment this and set default_rerank = bge-reranker above:
+# [models.rerank.bge-reranker]
+# provider = tei
+# base_url = http://127.0.0.1:8081
+# model = BAAI/bge-reranker-v2-m3
+[models.rerank.bnl-llm-rerank]
+provider = llm
+base_url = https://inference0-api.sdcc.bnl.gov
+model = nemotron-3-super-120b
+api_key_env = BNL_BRAIN_API_KEY
+max_output_tokens = 2048
+
+[models.chat.bnl-nemotron-super]
+provider = openai_compat
+base_url = https://inference0-api.sdcc.bnl.gov
+model = nemotron-3-super-120b
+api_key_env = BNL_BRAIN_API_KEY
+supports_tools = true
+context_window = 1048576
+
+[models.chat.bnl-nemotron-ultra]
+provider = openai_compat
+base_url = https://inference0-api.sdcc.bnl.gov
+model = nemotron-3-ultra-550b
+api_key_env = BNL_BRAIN_API_KEY
+supports_tools = true
+context_window = 524288
+
+[models.chat.bnl-gpt-oss-120b]
+provider = openai_compat
+base_url = https://inference0-api.sdcc.bnl.gov
+model = gpt-oss-120b
+api_key_env = BNL_BRAIN_API_KEY
+supports_tools = true
+context_window = 131072
+
+# Tool calling through the gateway not confirmed: not for the smart, deep and wiki presets
+# until supports_tools = true is set.
+[models.chat.bnl-muse-glimmer-30b]
+provider = openai_compat
+base_url = https://inference0-api.sdcc.bnl.gov
+model = muse-glimmer-30b
+api_key_env = BNL_BRAIN_API_KEY
+context_window = 131072
+
+[models.chat.bnl-gemma4-26b]
+provider = openai_compat
+base_url = https://inference0-api.sdcc.bnl.gov
+model = gemma-4-26b
+api_key_env = BNL_BRAIN_API_KEY
+context_window = 262144
+
+[websearch]
+# Web search for the smart preset and the agent ([features] web; docs/web-search.md).
+default = ddg
+# fetch_top = 3
+
+[websearch.ddg]
+kind = duckduckgo
+
+# [websearch.brave]
+# kind = brave
+# api_key_env = BRAVE_API_KEY
+
+# A remote KB server whose system and group KBs a standalone KB also lists and searches
+# (docs/retrieval.md, Remote knowledge bases). Standalone mode only.
+# [remote.central]
+# url = https://host.example.org/app/kb
+# pat_file = /var/lib/agenticwf-kb/secrets/central_pat
+# auth_url = https://auth.example.org
+# client_id = <Logto native app id>
+# resource = https://api.example.org
+# knowledge_bases = system:eic-docs
+
+[agentic]
+# Agentic search (docs/agentic-search.md). Empty model: [models] default_chat; it needs
+# supports_tools = true (see [models.chat.*] below) for the smart, deep and wiki presets.
+# model = system:small
+# The preset a request without one uses. deep searches the knowledge bases only; smart also mixes
+# in web results, so an answer may rest on a web page rather than your documents (the agent has
+# its own web search for when the KBs have nothing).
+default_preset = deep
+max_iterations = 10
+timeout = 180
+per_owner = 2
+
+[faq]
+priority_enabled = true
+score_boost = 1.2
+direct_answer_threshold = 0.9
+
+[features]
+faq = true
+records = true
+wiki = true
+memory = true
+web = true
+remote = true
+
+# What a new document KB starts with (docs/configuration.md, [knowledge_bases]); each KB's
+# owner can switch either off in its settings.
+[knowledge_bases]
+wiki_enabled = true
+memory_enabled = true
+# A summary per document and 3 questions per chunk ([models] default_chat): questions match how
+# people ask rather than how documents are written. Costs LLM calls at ingestion.
+summaries = true
+question_generation = true
+# Contextual chunking: one or two sentences per chunk placing it in its document (which system,
+# section, version, what "it" refers to), indexed with the chunk (one chat call per 12 chunks).
+contextual = true
+
+# Phase 3 features (switched on or off above). Defaults shown; docs/configuration.md.
+[records]
+plugins = hpo
+# statement_timeout = 5
+# max_rows = 1000
+
+[wiki]
+# synthesis_model =                 # default: [models] default_chat
+# extraction_granularity = standard # focused | standard | exhaustive
+# ingest_batch_size = 5
+
+[memory]
+# model =                           # default: [models] default_chat
+# default_group = default
+# graph_hops = 2
