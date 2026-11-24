@@ -167,3 +167,42 @@ def test_whitelisted_server_is_fetched_and_redirects_rechecked(local_server, mon
         asyncio.run(ssrf.fetch(local_server + "/redirect-private"))
     with pytest.raises(ssrf.FetchError):
         asyncio.run(ssrf.fetch(local_server + "/page", max_bytes=10))
+
+
+def test_fetch_goes_through_the_outbound_proxy_by_name(monkeypatch):
+    """Behind a proxy (https_proxy / http_proxy) a public page is fetched through it by host name,
+    not by its pinned address; no_proxy bypasses it."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from agenticwf.kb.runtime.security import ssrf
+
+    seen = []
+
+    class Proxy(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append(self.path)            # a proxy gets the absolute URL
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"<p>via proxy</p>")
+
+        def log_message(self, *a):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Proxy)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        async def public(host, port):
+            return "93.184.216.34"
+        monkeypatch.setattr(ssrf, "resolve_checked", public)
+        for name in ("no_proxy", "NO_PROXY", "all_proxy", "ALL_PROXY", "HTTP_PROXY"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{server.server_address[1]}")
+        page = asyncio.run(ssrf.fetch("http://docs.example.org/en/latest/"))
+        assert page.body == b"<p>via proxy</p>" and seen == ["http://docs.example.org/en/latest/"]
+        monkeypatch.setenv("no_proxy", ".example.org")
+        assert ssrf.proxy_for("http", "docs.example.org") is None
+        assert ssrf.proxy_for("http", "other.org") == f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()

@@ -22,7 +22,7 @@ from agenticwf.kb.core.orm.base.session import async_session_scope
 from agenticwf.kb.core.orm.models.kb import MODEL_TYPES, KBModel, utcnow
 from agenticwf.kb.runtime import access
 from agenticwf.kb.runtime.errors import Forbidden, Invalid, NotFound
-from agenticwf.kb.runtime.models.clients import ChatModel, Embedder, ModelError, ModelSpec, Reranker
+from agenticwf.kb.runtime.models.clients import ChatModel, Embedder, ModelError, ModelSpec, Reranker, outbound_proxy
 from agenticwf.kb.runtime.security.secrets import SecretBox
 
 LOG = get_logger(__name__)
@@ -59,6 +59,8 @@ def _parameters_from_section(options: dict[str, str]) -> dict[str, Any]:
                               "base_url": options.get("base_url", "")}
     if options.get("api_key_env"):
         params["api_key_env"] = options["api_key_env"]
+    if options.get("proxy"):   # system models only: spec() ignores it on a user's model
+        params["proxy"] = options["proxy"]
     for key in ("dimension", "max_concurrency", "context_window", "max_output_tokens", "truncate_prompt_tokens"):
         if options.get(key):
             params[key] = int(options[key])
@@ -83,6 +85,14 @@ def model_dict(row: KBModel) -> dict:
             "ref": f"system:{row.display_name}" if row.is_builtin else row.id,
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None}
+
+
+def model_proxy(builtin: bool, params: dict) -> str | None:
+    """A system model's own `proxy`, else [models] proxy; a user's model only ever gets the latter
+    (a proxy someone sets on their own model is ignored: it would route the server's traffic)."""
+    own = params.get("proxy") if builtin else None
+    default = config_get("models", "proxy") if config_has_option("models", "proxy") else None
+    return outbound_proxy(own or default)
 
 
 class ModelService:
@@ -166,7 +176,8 @@ class ModelService:
                          supports_tools=bool(params.get("supports_tools")),
                          supports_vision=bool(params.get("supports_vision")),
                          headers=dict(params.get("custom_headers") or {}),
-                         truncate_prompt_tokens=int(params.get("truncate_prompt_tokens") or 0))
+                         truncate_prompt_tokens=int(params.get("truncate_prompt_tokens") or 0),
+                         proxy=model_proxy(row.is_builtin, params))
 
     async def embedder(self, ref: str) -> Embedder:
         return Embedder(await self.spec(ref))

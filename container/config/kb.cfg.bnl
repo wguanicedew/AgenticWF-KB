@@ -46,10 +46,13 @@ poll_seconds = 1
 
 # Models: one section per model (docs/configuration.md, System models). A chat model that
 # agentic search uses needs supports_tools = true.
-# BNL BRAIN (LiteLLM at inference0-api.sdcc.bnl.gov), OpenAI-compatible: posts to
+# BNL BRAIN (LiteLLM at api.brain.bnl.gov), OpenAI-compatible: posts to
 # <base_url>/embeddings and <base_url>/chat/completions. BNL network or VPN only; keys at
 # https://inference0-api.sdcc.bnl.gov/km (BNL_BRAIN_API_KEY in agenticwf.env).
 [models]
+# Proxies are per model: each BRAIN model below sets the SDCC proxy (BRAIN is not reachable
+# directly); other models, page imports and web search connect directly, so the container sets
+# no https_proxy. `proxy = ...` here would apply to every model that sets none.
 default_embedding = bnl-nomic
 default_chat = bnl-nemotron-super
 # Results are re-ordered by how well each passage answers the query (docs/retrieval.md, Rerank).
@@ -58,7 +61,8 @@ embedding_timeout = 180
 
 [models.embedding.bnl-nomic]
 provider = openai_compat
-base_url = https://inference0-api.sdcc.bnl.gov
+base_url = https://api.brain.bnl.gov/v1
+proxy = http://proxy.sdcc.bnl.local:3128   # BRAIN only through the SDCC proxy
 model = nomic-embed-text
 dimension = 768
 api_key_env = BNL_BRAIN_API_KEY
@@ -74,14 +78,16 @@ max_concurrency = 2
 # model = BAAI/bge-reranker-v2-m3
 [models.rerank.bnl-llm-rerank]
 provider = llm
-base_url = https://inference0-api.sdcc.bnl.gov
+base_url = https://api.brain.bnl.gov/v1
+proxy = http://proxy.sdcc.bnl.local:3128   # BRAIN only through the SDCC proxy
 model = nemotron-3-super-120b
 api_key_env = BNL_BRAIN_API_KEY
 max_output_tokens = 2048
 
 [models.chat.bnl-nemotron-super]
 provider = openai_compat
-base_url = https://inference0-api.sdcc.bnl.gov
+base_url = https://api.brain.bnl.gov/v1
+proxy = http://proxy.sdcc.bnl.local:3128   # BRAIN only through the SDCC proxy
 model = nemotron-3-super-120b
 api_key_env = BNL_BRAIN_API_KEY
 supports_tools = true
@@ -89,15 +95,17 @@ context_window = 1048576
 
 [models.chat.bnl-nemotron-ultra]
 provider = openai_compat
-base_url = https://inference0-api.sdcc.bnl.gov
-model = nemotron-3-ultra-550b
+base_url = https://api.brain.bnl.gov/v1
+proxy = http://proxy.sdcc.bnl.local:3128   # BRAIN only through the SDCC proxy
+model = nemotron-3-ultra-550b-nvfp4
 api_key_env = BNL_BRAIN_API_KEY
 supports_tools = true
 context_window = 524288
 
 [models.chat.bnl-gpt-oss-120b]
 provider = openai_compat
-base_url = https://inference0-api.sdcc.bnl.gov
+base_url = https://api.brain.bnl.gov/v1
+proxy = http://proxy.sdcc.bnl.local:3128   # BRAIN only through the SDCC proxy
 model = gpt-oss-120b
 api_key_env = BNL_BRAIN_API_KEY
 supports_tools = true
@@ -107,14 +115,16 @@ context_window = 131072
 # until supports_tools = true is set.
 [models.chat.bnl-muse-glimmer-30b]
 provider = openai_compat
-base_url = https://inference0-api.sdcc.bnl.gov
+base_url = https://api.brain.bnl.gov/v1
+proxy = http://proxy.sdcc.bnl.local:3128   # BRAIN only through the SDCC proxy
 model = muse-glimmer-30b
 api_key_env = BNL_BRAIN_API_KEY
 context_window = 131072
 
 [models.chat.bnl-gemma4-26b]
 provider = openai_compat
-base_url = https://inference0-api.sdcc.bnl.gov
+base_url = https://api.brain.bnl.gov/v1
+proxy = http://proxy.sdcc.bnl.local:3128   # BRAIN only through the SDCC proxy
 model = gemma-4-26b
 api_key_env = BNL_BRAIN_API_KEY
 context_window = 262144

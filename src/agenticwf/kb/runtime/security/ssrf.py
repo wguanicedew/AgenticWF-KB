@@ -9,6 +9,9 @@ SSRF-safe HTTP fetch for URL import and refresh (docs/ingestion.md, SSRF-safe fe
   `[security] ssrf_whitelist` (host names and CIDRs, comma or space separated);
 * the connection goes to the checked address (DNS pinned, so a second lookup cannot change it),
   while TLS still verifies the certificate against the host name (SNI);
+* behind an outbound proxy (`https_proxy` / `http_proxy`, not bypassed by `no_proxy`) the request
+  goes through the proxy by host name instead: the proxy resolves it, so the address cannot be
+  pinned, but the host is still checked here first (whitelisted internal hosts stay direct);
 * redirects are followed by hand, at most 5, each one checked again;
 * the body is read up to `max_bytes`; a larger response is an error.
 """
@@ -18,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
+import urllib.request
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
@@ -81,6 +85,22 @@ async def resolve_checked(host: str, port: int) -> str:
     return str(infos[0])
 
 
+def proxy_for(scheme: str, host: str) -> str | None:
+    """The outbound proxy for a URL from the environment (https_proxy, http_proxy, all_proxy, in
+    either case), None when there is none or `no_proxy` names the host."""
+    proxies = urllib.request.getproxies_environment()
+    proxy = proxies.get(scheme) or proxies.get("all")
+    if not proxy or urllib.request.proxy_bypass_environment(host, proxies):
+        return None
+    return proxy if "://" in proxy else f"http://{proxy}"
+
+
+def _why(exc: Exception) -> str:
+    """httpx errors such as ConnectTimeout often have no message: name the error then."""
+    text = str(exc).strip()
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
 async def fetch(url: str, max_bytes: int = 20 * 1024 * 1024, timeout: float = 30.0) -> Fetched:
     current = url
     for _ in range(MAX_REDIRECTS + 1):
@@ -89,15 +109,22 @@ async def fetch(url: str, max_bytes: int = 20 * 1024 * 1024, timeout: float = 30
             raise FetchError(f"only http and https URLs can be imported: {current}")
         port = parts.port or (443 if parts.scheme == "https" else 80)
         address = await resolve_checked(parts.hostname, port)
+        # an internal host (allowed by the whitelist) is reached directly, never through the proxy
+        proxy = proxy_for(parts.scheme, parts.hostname) if _public(ipaddress.ip_address(address)) else None
         host_for_url = f"[{address}]" if ":" in address else address
         netloc = f"{host_for_url}:{port}"
         pinned = urlunsplit((parts.scheme, netloc, parts.path or "/", parts.query, ""))
         host_header = parts.hostname + (f":{parts.port}" if parts.port else "")
         extensions = {"sni_hostname": parts.hostname} if parts.scheme == "https" else {}
+        if proxy:   # the proxy connects by name: no pinning, no SNI override
+            pinned, headers, extensions = urlunsplit((parts.scheme, parts.netloc, parts.path or "/", parts.query, "")), \
+                {"User-Agent": USER_AGENT}, {}
+        else:
+            headers = {"Host": host_header, "User-Agent": USER_AGENT}
         try:
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-                request = client.build_request("GET", pinned, headers={"Host": host_header, "User-Agent": USER_AGENT},
-                                               extensions=extensions)
+            # trust_env off: the proxy is the one chosen above, and a direct fetch never goes through one
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False, proxy=proxy) as client:
+                request = client.build_request("GET", pinned, headers=headers, extensions=extensions)
                 response = await client.send(request, stream=True)
                 try:
                     if response.status_code in (301, 302, 303, 307, 308) and response.headers.get("location"):
@@ -114,5 +141,6 @@ async def fetch(url: str, max_bytes: int = 20 * 1024 * 1024, timeout: float = 30
                 finally:
                     await response.aclose()
         except httpx.HTTPError as exc:
-            raise FetchError(f"fetching {current} failed: {exc}") from exc
+            via = f" (through the proxy {urlsplit(proxy).hostname})" if proxy else ""
+            raise FetchError(f"fetching {current} failed{via}: {_why(exc)}") from exc
     raise FetchError(f"too many redirects from {url}")

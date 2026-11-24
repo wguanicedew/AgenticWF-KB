@@ -60,9 +60,43 @@ class ModelSpec:
     supports_vision: bool = False
     headers: dict[str, str] = field(default_factory=dict)
     truncate_prompt_tokens: int = 0
+    proxy: str | None = None        # outbound_proxy(): a URL, "direct", or None (the environment's)
 
     def concurrency(self) -> int:
         return self.max_concurrency or _cfg_int("max_concurrency", 4)
+
+
+# --- outbound proxy ----------------------------------------------------------------------------
+DIRECT = "direct"
+
+
+def outbound_proxy(value: str | None) -> str | None:
+    """An operator's `proxy` option ([models] or a [models.<kind>.<name>] section): None (unset or
+    empty: the environment's https_proxy / http_proxy, as before), "direct" (no proxy, whatever
+    the environment says), or a proxy URL."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    if value.lower() in (DIRECT, "none", "off"):
+        return DIRECT
+    return value if "://" in value else f"http://{value}"
+
+
+def httpx_proxy(proxy: str | None) -> dict[str, Any]:
+    """httpx arguments for `outbound_proxy`'s value. With a setting the environment's proxies are
+    not read (trust_env off); its CA bundle (SSL_CERT_FILE, SSL_CERT_DIR) still is."""
+    if proxy is None:
+        return {}
+    import os
+    import ssl
+
+    kwargs: dict[str, Any] = {"trust_env": False}
+    if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
+        kwargs["verify"] = ssl.create_default_context(cafile=os.environ.get("SSL_CERT_FILE") or None,
+                                                      capath=os.environ.get("SSL_CERT_DIR") or None)
+    if proxy != DIRECT:
+        kwargs["proxy"] = proxy
+    return kwargs
 
 
 # --- concurrency and retries ------------------------------------------------------------------
@@ -98,7 +132,7 @@ async def _send(spec: ModelSpec, path: str, body: dict, timeout: float) -> Any:
     async with _semaphore(spec):
         for attempt in range(retries + 1):
             try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0)) as client:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0), **httpx_proxy(spec.proxy)) as client:
                     response = await client.post(url, json=body, headers=headers)
                 if response.status_code in RETRY_STATUS and attempt < retries:
                     raise httpx.HTTPStatusError("retryable", request=response.request, response=response)
